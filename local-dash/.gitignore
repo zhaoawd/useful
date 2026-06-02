@@ -1,0 +1,6 @@
+# Runtime logs
+logs/*.log
+
+# Machine-local runtime data (projects/tasks/run history).
+# These are auto-created on first run by server.js (ensureTasksFile/ensureProjectsFile).
+data/*.json
