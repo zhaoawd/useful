@@ -1,0 +1,14 @@
+{
+  "name": "claude-task-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "install-daemon": "zsh scripts/install-launchd.zsh",
+    "uninstall-daemon": "zsh scripts/uninstall-launchd.zsh"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

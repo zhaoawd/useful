@@ -1,0 +1,64 @@
+{
+  "projects": [
+    {
+      "id": "mpve3c24-8rkwod",
+      "name": "home",
+      "path": "/Users/kolar",
+      "notes": "Imported from Claude trusted projects",
+      "pinned": true,
+      "sortOrder": 1780329290188,
+      "createdAt": "2026-06-01T15:54:50.187Z",
+      "updatedAt": "2026-06-01T15:54:50.187Z"
+    },
+    {
+      "id": "mpve3c24-1vo8qg",
+      "name": "data_ge_new",
+      "path": "/Users/kolar/github/data_ge_new",
+      "notes": "Imported from Claude trusted projects",
+      "pinned": true,
+      "sortOrder": 1780329290189,
+      "createdAt": "2026-06-01T15:54:50.187Z",
+      "updatedAt": "2026-06-01T15:54:50.187Z"
+    },
+    {
+      "id": "mpve3c24-fyh76k",
+      "name": "linear-manage",
+      "path": "/Users/kolar/github/linear-manage",
+      "notes": "Imported from Claude trusted projects",
+      "pinned": true,
+      "sortOrder": 1780329290190,
+      "createdAt": "2026-06-01T15:54:50.187Z",
+      "updatedAt": "2026-06-01T15:54:50.187Z"
+    },
+    {
+      "id": "mpve3c24-javl43",
+      "name": "multica",
+      "path": "/Users/kolar/github/multica",
+      "notes": "Imported from Claude trusted projects",
+      "pinned": true,
+      "sortOrder": 1780329290191,
+      "createdAt": "2026-06-01T15:54:50.187Z",
+      "updatedAt": "2026-06-01T15:54:50.187Z"
+    },
+    {
+      "id": "mpve5m7q-9s1gdq",
+      "name": "pi-data",
+      "path": "/Users/kolar/github/pi-data",
+      "notes": "",
+      "pinned": true,
+      "sortOrder": 1780329396662,
+      "createdAt": "2026-06-01T15:56:36.662Z",
+      "updatedAt": "2026-06-01T15:56:36.662Z"
+    },
+    {
+      "id": "mpve8iib-z46x0l",
+      "name": "autophone",
+      "path": "/Users/kolar/github/autophone",
+      "notes": "",
+      "pinned": true,
+      "sortOrder": 1780329531827,
+      "createdAt": "2026-06-01T15:58:51.827Z",
+      "updatedAt": "2026-06-01T15:58:51.827Z"
+    }
+  ]
+}
