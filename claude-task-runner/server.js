@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,6 +14,13 @@ const projectsFile = path.join(dataDir, "projects.json");
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 4321);
 const running = new Map();
+const serverStartedAt = nowIso();
+
+// keepalive-cc-codex runtime locations (independent daemon)
+const keepaliveStateDir =
+  process.env.KEEPALIVE_STATE_DIR || path.join(os.homedir(), ".local/state/keepalive-cc-codex");
+const keepaliveLogFile =
+  process.env.KEEPALIVE_LOG_FILE || path.join(os.homedir(), ".local/var/log/keepalive-cc-codex.log");
 
 await mkdir(dataDir, { recursive: true });
 await mkdir(logDir, { recursive: true });
@@ -408,7 +416,81 @@ function send(res, status, body, headers = {}) {
   res.end(payload);
 }
 
+async function readKeepaliveState() {
+  const readEpoch = async (name) => {
+    const raw = await readFile(path.join(keepaliveStateDir, name), "utf8").catch(() => null);
+    if (raw === null) return null;
+    const n = Number(String(raw).trim());
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const logTail = await readFile(keepaliveLogFile, "utf8").catch(() => null);
+  const lines = logTail ? logTail.split(/\r?\n/) : [];
+
+  // Scan from the end for the most recent exit line of each service.
+  const lastFor = (service) => {
+    const exitRe = new RegExp(`^\\[${service} \\(([^)]*)\\) exit=(-?\\d+) elapsed=([^\\]]*)\\]`);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const m = lines[i].match(exitRe);
+      if (!m) continue;
+      // look a few lines above for a 403 / auth marker in the same block
+      const context = lines.slice(Math.max(0, i - 6), i + 1).join("\n");
+      const code = Number(m[2]);
+      let status = "ok";
+      let note = "";
+      if (/403 Request not allowed/i.test(context)) {
+        status = "err";
+        note = "403 Request not allowed";
+      } else if (code === 124) {
+        status = "warn";
+        note = "timeout (124)";
+      } else if (code !== 0) {
+        status = "warn";
+        note = `exit=${code}`;
+      }
+      return { variant: m[1], exitCode: code, elapsed: m[3], status, note };
+    }
+    return null;
+  };
+
+  return {
+    available: Boolean(logTail) || (await readEpoch("claude.next_epoch")) !== null,
+    logFile: keepaliveLogFile,
+    stateDir: keepaliveStateDir,
+    services: {
+      claude: { ...(lastFor("claude") || { status: "idle" }), nextEpoch: await readEpoch("claude.next_epoch") },
+      codex: { ...(lastFor("codex") || { status: "idle" }), nextEpoch: await readEpoch("codex.next_epoch") }
+    }
+  };
+}
+
 async function handleApi(req, res, pathname) {
+  if (pathname === "/api/keepalive" && req.method === "GET") {
+    const state = await readKeepaliveState().catch(() => ({ available: false, services: {} }));
+    return send(res, 200, state);
+  }
+
+  const keepaliveLogMatch = pathname === "/api/keepalive/log" && req.method === "GET";
+  if (keepaliveLogMatch) {
+    const content = await readFile(keepaliveLogFile, "utf8").catch(() => null);
+    if (content === null) return send(res, 404, "keepalive log not found");
+    return send(res, 200, content.slice(-200_000));
+  }
+
+  if (pathname === "/api/system" && req.method === "GET") {
+    const tasks = await loadTasks();
+    const projects = await loadProjects();
+    return send(res, 200, {
+      port,
+      startedAt: serverStartedAt,
+      now: nowIso(),
+      runningCount: running.size,
+      taskCount: tasks.length,
+      enabledCount: tasks.filter((t) => t.enabled).length,
+      projectCount: projects.length
+    });
+  }
+
   if (pathname === "/api/projects" && req.method === "GET") {
     const projects = await loadProjects();
     return send(res, 200, { projects: sortProjects(projects) });

@@ -1,521 +1,316 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Claude Task Runner</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #f7f7f4;
-        --panel: #ffffff;
-        --text: #1f2328;
-        --muted: #646b75;
-        --line: #d8d8d2;
-        --accent: #2563eb;
-        --danger: #b42318;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: var(--bg);
-        color: var(--text);
-      }
-      header {
-        padding: 24px clamp(16px, 4vw, 40px) 12px;
-        border-bottom: 1px solid var(--line);
-      }
-      h1 { margin: 0 0 6px; font-size: 24px; }
-      p { margin: 0; color: var(--muted); }
-      main {
-        display: grid;
-        gap: 20px;
-        grid-template-columns: minmax(0, 1fr);
-        padding: 20px clamp(16px, 4vw, 40px);
-      }
-      .stack { display: grid; gap: 20px; }
-      section {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 16px;
-      }
-      h2 { margin: 0 0 14px; font-size: 18px; }
-      label { display: block; margin: 12px 0 6px; font-weight: 650; }
-      input, textarea, select {
-        width: 100%;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 9px 10px;
-        font: inherit;
-        background: white;
-      }
-      textarea { min-height: 100px; resize: vertical; }
-      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .checks { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-      .checks input { width: auto; }
-      button {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: white;
-        padding: 8px 11px;
-        font: inherit;
-        cursor: pointer;
-      }
-      button.primary { background: var(--accent); color: white; border-color: var(--accent); }
-      button.danger { color: var(--danger); }
-      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-      .task {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 10px;
-      }
-      .task h3 { margin: 0 0 8px; font-size: 16px; }
-      .meta { color: var(--muted); font-size: 13px; line-height: 1.6; }
-      .pill {
-        display: inline-block;
-        border-radius: 999px;
-        padding: 2px 8px;
-        border: 1px solid var(--line);
-        font-size: 12px;
-        margin-left: 6px;
-      }
-      .pill.favorite {
-        border-color: #f59e0b;
-        color: #92400e;
-        background: #fffbeb;
-      }
-      pre {
-        white-space: pre-wrap;
-        overflow: auto;
-        max-height: 420px;
-        background: #111827;
-        color: #e5e7eb;
-        padding: 14px;
-        border-radius: 8px;
-        font-size: 13px;
-      }
-      @media (max-width: 880px) {
-        main { grid-template-columns: 1fr; }
-      }
-    </style>
-  </head>
-  <body>
-    <header>
-      <h1>Claude Task Runner</h1>
-      <p>本地定时触发 Claude Code 任务。命令模板可配置，避免绑定某个 CLI 参数版本。</p>
-    </header>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kolar 控制台 · Claude Task Runner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Source+Code+Pro:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --gray-25:#fff; --gray-50:#f8f8f8; --gray-75:#f3f3f3; --gray-100:#eee;
+  --gray-200:#e6e6e6; --gray-300:#d5d5d5; --gray-400:#bcbcbc; --gray-500:#9f9f9f;
+  --gray-600:#818181; --gray-700:#5c5c5c; --gray-800:#3c3c3c; --gray-900:#222;
+  --blue-700:#2680eb; --blue-800:#1473e6; --blue-900:#0d66d0; --blue-100:#e0f2ff;
+  --green-700:#2d9d78; --green-900:#12805c; --green-100:#e3f6ec;
+  --red-800:#d7373f; --red-900:#c9252d; --red-100:#ffeceb;
+  --orange-800:#da7b11; --orange-900:#bd5b00; --orange-100:#fff0e0;
+  --accent:var(--blue-800);
+  --bg:var(--gray-50); --panel:var(--gray-25);
+  --ink:var(--gray-900); --body:var(--gray-800); --muted:var(--gray-600);
+  --line:var(--gray-200); --line-strong:var(--gray-300);
+  --radius:8px; --radius-lg:10px; --radius-full:9999px;
+  --shadow:0 1px 3px rgba(15,18,22,.06),0 1px 2px rgba(15,18,22,.04);
+  --shadow-lg:0 8px 24px rgba(15,18,22,.12);
+  --ease:cubic-bezier(.45,0,.4,1);
+  --sans:"Source Sans 3",ui-sans-serif,system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+  --code:"Source Code Pro",Monaco,"PingFang SC",monospace;
+}
+*{box-sizing:border-box;}
+button{white-space:nowrap;}
+html,body{margin:0;height:100%;}
+body{
+  font-family:var(--sans); background:var(--bg); color:var(--body);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.icon{width:1em;height:1em;display:inline-block;vertical-align:-.13em;fill:currentColor;flex:none;}
 
-    <main>
-      <section>
-        <h2>任务列表</h2>
-        <div id="tasks"></div>
+/* ---------------- Top bar ---------------- */
+.appbar{
+  position:sticky; top:0; z-index:30; background:rgba(255,255,255,.86);
+  backdrop-filter:saturate(1.4) blur(12px);
+  border-bottom:1px solid var(--line); padding:14px clamp(16px,4vw,40px);
+  display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+}
+.brand{display:flex;align-items:center;gap:11px;}
+.logo{
+  width:34px;height:34px;border-radius:9px;flex:none;
+  background:linear-gradient(135deg,var(--gray-900),var(--gray-700));
+  color:#fff;display:grid;place-items:center;font-weight:700;font-size:16px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.18);
+}
+.brand h1{margin:0;font-size:17px;font-weight:700;color:var(--ink);letter-spacing:-.01em;line-height:1.1;}
+.brand .sub{font-size:12px;color:var(--muted);font-weight:500;}
+.mode{
+  font-size:11px;font-weight:700;border-radius:var(--radius-full);padding:3px 9px;
+  display:inline-flex;align-items:center;gap:5px;border:1px solid transparent;
+}
+.mode.live{background:var(--green-100);color:var(--green-900);}
+.mode.demo{background:var(--orange-100);color:var(--orange-900);}
+.appbar .spacer{flex:1;}
+.stat-row{display:flex;gap:8px;flex-wrap:wrap;}
+.stat{
+  display:flex;align-items:center;gap:7px;background:var(--gray-75);
+  border:1px solid var(--line);border-radius:var(--radius-full);
+  padding:5px 12px 5px 10px;font-size:12.5px;font-weight:600;color:var(--body);
+  white-space:nowrap;flex:none;
+}
+.stat b{font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;}
+.dot.ok{background:var(--green-700);} .dot.err{background:var(--red-800);}
+.dot.warn{background:var(--orange-800);} .dot.idle{background:var(--gray-400);}
+.dot.run{background:var(--blue-700);box-shadow:0 0 0 0 rgba(38,128,235,.5);animation:pulse 2s var(--ease) infinite;}
+@keyframes pulse{70%{box-shadow:0 0 0 6px rgba(38,128,235,0);}100%{box-shadow:0 0 0 0 rgba(38,128,235,0);}}
+.clock{font-family:var(--code);font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;}
 
-        <h2 style="margin-top: 22px;">运行日志</h2>
-        <div class="actions" id="logs"></div>
-        <pre id="log-view">选择一个日志查看最近输出。</pre>
-      </section>
+/* ---------------- Toolbar ---------------- */
+.toolbar{
+  padding:14px clamp(16px,4vw,40px) 0; display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+}
+.segs{display:inline-flex;background:var(--gray-100);border-radius:var(--radius-full);padding:3px;gap:2px;}
+.seg{
+  border:0;background:transparent;font:inherit;font-weight:600;font-size:13px;color:var(--muted);
+  padding:6px 15px;border-radius:var(--radius-full);cursor:pointer;transition:.15s var(--ease);
+}
+.seg[aria-pressed="true"]{background:#fff;color:var(--ink);box-shadow:var(--shadow);}
+.chips{display:flex;gap:7px;flex-wrap:wrap;}
+.chip{
+  border:1px solid var(--line-strong);background:#fff;border-radius:var(--radius-full);
+  padding:6px 13px;font:inherit;font-size:12.5px;font-weight:600;color:var(--body);
+  cursor:pointer;display:flex;align-items:center;gap:7px;transition:.15s var(--ease);
+}
+.chip:hover{border-color:var(--gray-400);}
+.chip[aria-pressed="true"]{background:var(--gray-900);border-color:var(--gray-900);color:#fff;}
+.chip[aria-pressed="true"] .dot{box-shadow:0 0 0 2px rgba(255,255,255,.25);}
+.toolbar .spacer{flex:1;}
+.btn{
+  border:1px solid var(--line-strong);background:#fff;border-radius:var(--radius);
+  padding:8px 14px;font:inherit;font-size:13px;font-weight:600;color:var(--body);
+  cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.15s var(--ease);
+}
+.btn:hover{background:var(--gray-75);border-color:var(--gray-400);}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+.btn.primary:hover{background:var(--blue-900);border-color:var(--blue-900);}
+.btn:disabled{opacity:.5;cursor:default;}
 
-      <section>
-        <h2 id="form-title">新建任务</h2>
-        <form id="task-form">
-          <input type="hidden" id="task-id" />
+/* ---------------- Board ---------------- */
+.board{
+  display:flex;gap:16px;align-items:flex-start;
+  padding:16px clamp(16px,4vw,40px) 60px;overflow-x:auto;min-height:60vh;
+}
+.col{flex:1 1 0;min-width:288px;display:flex;flex-direction:column;gap:12px;}
+.col-head{display:flex;align-items:center;gap:9px;padding:2px 4px;}
+.col-head .ci{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;font-size:15px;flex:none;color:#fff;}
+.col-head h2{margin:0;font-size:13px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.05em;}
+.count{
+  margin-left:auto;font-size:12px;font-weight:700;color:var(--muted);
+  background:var(--gray-100);border-radius:var(--radius-full);min-width:22px;height:22px;
+  padding:0 7px;display:grid;place-items:center;font-variant-numeric:tabular-nums;
+}
+.col-body{display:flex;flex-direction:column;gap:10px;}
+.empty{
+  border:1.5px dashed var(--line);border-radius:var(--radius-lg);padding:18px 14px;
+  color:var(--muted);font-size:12.5px;text-align:center;
+}
 
-          <label for="name">任务名称</label>
-          <input id="name" required placeholder="夜间修复测试" />
+/* ---------------- Card ---------------- */
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow);overflow:hidden;transition:.18s var(--ease);
+}
+.card:hover{box-shadow:var(--shadow-lg);transform:translateY(-1px);border-color:var(--line-strong);}
+.card.dim{opacity:.32;filter:saturate(.5);}
+.card.busy{pointer-events:none;opacity:.7;}
+.card-main{padding:13px 14px;cursor:pointer;display:flex;flex-direction:column;gap:9px;}
+.row1{display:flex;align-items:flex-start;gap:10px;}
+.glyph{width:32px;height:32px;border-radius:8px;flex:none;display:grid;place-items:center;font-size:17px;color:#fff;}
+.glyph.mono{font-family:var(--code);font-weight:600;font-size:14px;letter-spacing:-.02em;}
+.titlewrap{min-width:0;flex:1;}
+.titlewrap .t{font-size:14.5px;font-weight:700;color:var(--ink);line-height:1.25;}
+.titlewrap .s{font-size:12px;color:var(--muted);line-height:1.4;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--code);}
+.badge{font-size:11px;font-weight:700;border-radius:var(--radius-full);padding:3px 9px 3px 7px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none;}
+.badge.ok{background:var(--green-100);color:var(--green-900);}
+.badge.err{background:var(--red-100);color:var(--red-900);}
+.badge.warn{background:var(--orange-100);color:var(--orange-900);}
+.badge.run{background:var(--blue-100);color:var(--blue-900);}
+.badge.idle{background:var(--gray-100);color:var(--gray-700);}
+.meta{display:flex;flex-direction:column;gap:5px;}
+.mrow{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted);min-width:0;}
+.mrow .k{color:var(--gray-500);min-width:54px;flex:none;white-space:nowrap;}
+.mrow .v{color:var(--body);font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mrow .v.code{font-family:var(--code);font-size:12px;}
+.countdown{font-family:var(--code);font-weight:600;font-variant-numeric:tabular-nums;}
+.countdown.soon{color:var(--orange-900);} .countdown.over{color:var(--red-900);}
 
-          <label for="projectSelect">本地项目</label>
-          <select id="projectSelect">
-            <option value="">不绑定项目，手动填写路径</option>
-          </select>
+/* expandable detail */
+.detail{border-top:1px solid var(--line);background:var(--gray-50);max-height:0;overflow:hidden;transition:max-height .28s var(--ease);}
+.card.open .detail{max-height:640px;}
+.detail-in{padding:13px 14px;display:flex;flex-direction:column;gap:11px;}
+.dlabel{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--gray-500);margin-bottom:4px;}
+.codeblock{font-family:var(--code);font-size:11.5px;line-height:1.6;color:var(--gray-800);background:#fff;border:1px solid var(--line);border-radius:7px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;}
+.codeblock.dark{background:#1f2124;color:#e3e3e3;border-color:#1f2124;max-height:200px;overflow:auto;}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px;}
+.kv dt{color:var(--gray-500);font-weight:500;} .kv dd{margin:0;color:var(--body);font-weight:500;word-break:break-word;}
+.dactions{display:flex;gap:8px;flex-wrap:wrap;}
+.mini{
+  border:1px solid var(--line-strong);background:#fff;border-radius:7px;padding:6px 11px;
+  font:inherit;font-size:12px;font-weight:600;color:var(--body);cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;transition:.15s var(--ease);
+}
+.mini:hover{background:var(--gray-75);} .mini.danger{color:var(--red-900);} .mini.danger:hover{background:var(--red-100);}
+.mini .icon{font-size:13px;}
 
-          <label for="cwd">仓库路径</label>
-          <input id="cwd" required placeholder="/Users/kolar/github/project" />
+/* enabled switch */
+.switch{width:34px;height:20px;border-radius:var(--radius-full);background:var(--gray-300);position:relative;cursor:pointer;flex:none;transition:.18s var(--ease);border:0;padding:0;}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:.18s var(--ease);}
+.switch[aria-checked="true"]{background:var(--green-700);}
+.switch[aria-checked="true"]::after{left:16px;}
 
-          <label for="prompt">任务 Prompt</label>
-          <textarea id="prompt" required placeholder="检查当前测试失败原因，修复代码，运行测试，并总结改动。"></textarea>
+/* add card */
+.add-card{
+  border:1.5px dashed var(--line-strong);border-radius:var(--radius-lg);background:transparent;
+  color:var(--muted);font:inherit;font-size:13px;font-weight:600;padding:14px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s var(--ease);
+}
+.add-card:hover{border-color:var(--accent);color:var(--accent);background:var(--blue-100);}
 
-          <label for="commandTemplate">命令模板</label>
-          <input id="commandTemplate" value='claude --print "$TASK_PROMPT" --permission-mode acceptEdits' />
+.foot{padding:8px clamp(16px,4vw,40px) 40px;color:var(--gray-500);font-size:12px;text-align:center;}
+.foot code{font-family:var(--code);background:var(--gray-100);padding:1px 5px;border-radius:4px;}
 
-          <label class="checks">
-            <input id="authCheckEnabled" type="checkbox" checked />
-            启动前检查 Claude Code 登录状态
-          </label>
+/* ---------------- Drawer (forms) ---------------- */
+.scrim{position:fixed;inset:0;background:rgba(20,22,26,.42);opacity:0;visibility:hidden;transition:.22s var(--ease);z-index:40;}
+.scrim.show{opacity:1;visibility:visible;}
+.drawer{
+  position:fixed;top:0;right:0;height:100%;width:min(460px,100%);background:var(--panel);
+  box-shadow:-12px 0 40px rgba(15,18,22,.18);z-index:50;display:flex;flex-direction:column;
+  transform:translateX(100%);transition:transform .26s var(--ease);
+}
+.drawer.show{transform:translateX(0);}
+.drawer-head{display:flex;align-items:center;gap:10px;padding:18px 22px;border-bottom:1px solid var(--line);}
+.drawer-head h3{margin:0;font-size:16px;font-weight:700;color:var(--ink);}
+.drawer-head .x{margin-left:auto;border:0;background:var(--gray-75);width:30px;height:30px;border-radius:7px;cursor:pointer;color:var(--muted);display:grid;place-items:center;font-size:15px;}
+.drawer-head .x:hover{background:var(--gray-100);color:var(--ink);}
+.drawer-body{padding:18px 22px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:14px;}
+.drawer-foot{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:10px;}
+.drawer-foot .btn{flex:1;justify-content:center;}
+.field{display:flex;flex-direction:column;gap:6px;}
+.field>label{font-size:12px;font-weight:700;color:var(--gray-700);}
+.field .hint{font-size:11px;color:var(--muted);}
+.input,.select,.textarea{
+  width:100%;border:1px solid var(--line-strong);border-radius:var(--radius);padding:9px 11px;
+  font:inherit;font-size:13px;color:var(--ink);background:#fff;transition:.15s var(--ease);
+}
+.textarea{min-height:92px;resize:vertical;font-family:var(--code);font-size:12.5px;line-height:1.6;}
+.input.code{font-family:var(--code);font-size:12.5px;}
+.input:focus,.select:focus,.textarea:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px rgba(38,128,235,.16);}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.checkrow{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600;color:var(--body);cursor:pointer;}
+.checkrow input{width:16px;height:16px;accent-color:var(--accent);}
 
-          <div class="row">
-            <div>
-              <label for="authCheckCommand">登录检查命令</label>
-              <input id="authCheckCommand" value="claude auth status" />
-            </div>
-            <div>
-              <label for="authTimeoutSeconds">登录步骤超时秒数</label>
-              <input id="authTimeoutSeconds" type="number" min="5" value="300" />
-            </div>
-          </div>
+/* ---------------- Log modal ---------------- */
+.modal{
+  position:fixed;inset:0;display:none;place-items:center;z-index:60;padding:5vh 4vw;
+}
+.modal.show{display:grid;}
+.modal-card{
+  background:var(--panel);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);
+  width:min(900px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;
+}
+.modal-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);}
+.modal-head h3{margin:0;font-size:14px;font-weight:700;color:var(--ink);font-family:var(--code);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.modal-head .x{margin-left:auto;border:0;background:var(--gray-75);width:30px;height:30px;border-radius:7px;cursor:pointer;color:var(--muted);display:grid;place-items:center;font-size:15px;flex:none;}
+.modal-body{padding:0;overflow:auto;background:#1f2124;}
+.modal-body pre{margin:0;padding:16px 18px;color:#e3e3e3;font-family:var(--code);font-size:12px;line-height:1.65;white-space:pre-wrap;word-break:break-word;}
 
-          <label for="authLoginCommand">未登录时执行一次</label>
-          <input id="authLoginCommand" value="claude" />
+/* ---------------- Toast ---------------- */
+.toasts{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center;}
+.toast{
+  background:var(--gray-900);color:#fff;font-size:13px;font-weight:600;border-radius:var(--radius-full);
+  padding:9px 16px;box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px;
+  animation:toastin .2s var(--ease);
+}
+.toast.err{background:var(--red-900);}
+.toast .dot{box-shadow:0 0 0 2px rgba(255,255,255,.2);}
+@keyframes toastin{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
 
-          <div class="row">
-            <div>
-              <label for="scheduleType">触发方式</label>
-              <select id="scheduleType">
-                <option value="manual">仅手动</option>
-                <option value="once">一次性</option>
-                <option value="daily">每天指定时间</option>
-                <option value="weekly">每周指定时间</option>
-                <option value="interval">间隔触发</option>
-              </select>
-            </div>
-            <div>
-              <label for="maxRuntimeMinutes">最长运行分钟</label>
-              <input id="maxRuntimeMinutes" type="number" min="1" value="90" />
-            </div>
-          </div>
+@media(max-width:920px){
+  .board{flex-direction:column;overflow:visible;}
+  .col{width:100%;}
+  .appbar .stat-row{order:3;width:100%;}
+}
+</style>
+</head>
+<body>
 
-          <div id="schedule-fields"></div>
+<header class="appbar">
+  <div class="brand">
+    <div class="logo">k</div>
+    <div>
+      <h1>kolar 控制台</h1>
+      <div class="sub">Claude Task Runner · 工具与项目看板</div>
+    </div>
+    <span class="mode" id="mode" title="数据来源"></span>
+  </div>
+  <div class="spacer"></div>
+  <div class="stat-row" id="stats"></div>
+  <div class="clock" id="clock"></div>
+</header>
 
-          <label class="checks">
-            <input id="enabled" type="checkbox" checked />
-            启用自动触发
-          </label>
+<div class="toolbar">
+  <div class="segs" role="tablist" aria-label="视图">
+    <button class="seg" data-view="category" aria-pressed="true">按分类</button>
+    <button class="seg" data-view="status" aria-pressed="false">按状态</button>
+  </div>
+  <div class="chips" id="filters"></div>
+  <div class="spacer"></div>
+  <button class="btn" id="syncBtn"><svg class="icon"><use href="#i-download"/></svg>同步</button>
+  <button class="btn primary" id="addTaskBtn"><svg class="icon"><use href="#i-add"/></svg>新建任务</button>
+</div>
 
-          <div class="actions">
-            <button class="primary" type="submit">保存任务</button>
-            <button type="button" id="reset-form">清空表单</button>
-          </div>
-        </form>
-      </section>
+<main class="board" id="board"></main>
 
-      <section>
-        <h2 id="project-form-title">本地项目</h2>
-        <form id="project-form">
-          <input type="hidden" id="project-id" />
+<div class="foot">
+  实时读取 claude-task-runner <code>/api/tasks</code> · <code>/api/projects</code> 与 keepalive-cc-codex <code>/api/keepalive</code> · 离线时回退到本地快照演示数据
+</div>
 
-          <label for="projectName">项目名称</label>
-          <input id="projectName" required placeholder="my-repo" />
+<!-- scrim + drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <h3 id="drawerTitle">新建任务</h3>
+    <button class="x" id="drawerClose" aria-label="关闭">✕</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+  <div class="drawer-foot" id="drawerFoot"></div>
+</aside>
 
-          <label for="projectPath">项目地址</label>
-          <input id="projectPath" required placeholder="/Users/kolar/github/my-repo" />
+<!-- log modal -->
+<div class="modal" id="logModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <svg class="icon" style="color:var(--muted)"><use href="#i-download"/></svg>
+      <h3 id="logTitle">日志</h3>
+      <button class="x" id="logClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body"><pre id="logBody">加载中…</pre></div>
+  </div>
+</div>
 
-          <label for="projectNotes">备注</label>
-          <input id="projectNotes" placeholder="可选，例如主分支、用途、注意事项" />
+<div class="toasts" id="toasts"></div>
 
-          <label class="checks">
-            <input id="projectPinned" type="checkbox" />
-            固定为常用项目
-          </label>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs id="sprite"></defs></svg>
 
-          <div class="actions">
-            <button class="primary" type="submit">保存项目</button>
-            <button type="button" id="reset-project-form">清空项目</button>
-          </div>
-        </form>
-        <div id="projects" style="margin-top: 14px;"></div>
-      </section>
-    </main>
-
-    <script>
-      const $ = (id) => document.getElementById(id);
-      let tasks = [];
-      let projects = [];
-
-      function scheduleEditor(type, schedule = {}) {
-        if (type === "once") {
-          return `<label for="runAt">运行时间</label><input id="runAt" type="datetime-local" value="${toLocalInput(schedule.runAt)}" />`;
-        }
-        if (type === "daily") {
-          return `<label for="dailyTimes">每天时间，逗号分隔</label><input id="dailyTimes" placeholder="09:00, 13:30, 23:15" value="${(schedule.times || []).join(", ")}" />`;
-        }
-        if (type === "weekly") {
-          return `
-            <label for="weeklyDays">星期，0=周日，1=周一，逗号分隔</label>
-            <input id="weeklyDays" placeholder="1, 3, 5" value="${(schedule.days || []).join(", ")}" />
-            <label for="weeklyTimes">当天时间，逗号分隔</label>
-            <input id="weeklyTimes" placeholder="10:00, 18:00" value="${(schedule.times || []).join(", ")}" />
-          `;
-        }
-        if (type === "interval") {
-          return `<label for="intervalMinutes">间隔分钟</label><input id="intervalMinutes" type="number" min="1" value="${schedule.minutes || 300}" />`;
-        }
-        return "";
-      }
-
-      function toLocalInput(value) {
-        if (!value) return "";
-        const d = new Date(value);
-        if (Number.isNaN(d.getTime())) return "";
-        const pad = (n) => String(n).padStart(2, "0");
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      }
-
-      function parseList(value) {
-        return value.split(",").map((item) => item.trim()).filter(Boolean);
-      }
-
-      function readSchedule() {
-        const type = $("scheduleType").value;
-        if (type === "once") return { type, runAt: $("runAt").value ? new Date($("runAt").value).toISOString() : null };
-        if (type === "daily") return { type, times: parseList($("dailyTimes").value) };
-        if (type === "weekly") return { type, days: parseList($("weeklyDays").value).map(Number), times: parseList($("weeklyTimes").value) };
-        if (type === "interval") return { type, minutes: Number($("intervalMinutes").value || 300) };
-        return { type: "manual" };
-      }
-
-      function scheduleText(schedule) {
-        if (!schedule || schedule.type === "manual") return "仅手动";
-        if (schedule.type === "once") return `一次性 ${new Date(schedule.runAt).toLocaleString()}`;
-        if (schedule.type === "daily") return `每天 ${schedule.times.join(", ")}`;
-        if (schedule.type === "weekly") return `每周 ${schedule.days.join(", ")} / ${schedule.times.join(", ")}`;
-        if (schedule.type === "interval") return `每 ${schedule.minutes} 分钟`;
-        return schedule.type;
-      }
-
-      function renderScheduleFields(schedule) {
-        $("schedule-fields").innerHTML = scheduleEditor($("scheduleType").value, schedule);
-      }
-
-      function renderTasks() {
-        $("tasks").innerHTML = tasks.length ? tasks.map((task) => `
-          <div class="task">
-            <h3>${escapeHtml(task.name)}
-              <span class="pill">${task.enabled ? "enabled" : "paused"}</span>
-              ${task.running ? '<span class="pill">running</span>' : ""}
-            </h3>
-            <div class="meta">
-              project: ${escapeHtml(task.projectName || projectName(task.projectId)) || "none"}<br />
-              run path: ${escapeHtml(task.resolvedCwd || task.cwd)}<br />
-              fallback path: ${escapeHtml(task.cwd)}<br />
-              schedule: ${escapeHtml(scheduleText(task.schedule))}<br />
-              next: ${task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : "none"}<br />
-              last: ${task.lastStatus || "never"} ${task.lastRunAt ? new Date(task.lastRunAt).toLocaleString() : ""}
-            </div>
-            <div class="actions">
-              <button onclick="editTask('${task.id}')">编辑</button>
-              <button onclick="runTaskNow('${task.id}')">立即运行</button>
-              <button onclick="toggleTask('${task.id}')">${task.enabled ? "暂停" : "启用"}</button>
-              ${task.lastLog ? `<button onclick="openLog('${task.lastLog}')">查看最近日志</button>` : ""}
-              <button class="danger" onclick="deleteTask('${task.id}')">删除</button>
-            </div>
-          </div>
-        `).join("") : `<p>还没有任务。</p>`;
-      }
-
-      function projectName(projectId) {
-        return projects.find((project) => project.id === projectId)?.name || "";
-      }
-
-      function renderProjectSelect(selected = "") {
-        const favoriteProjects = projects.filter((project) => project.pinned);
-        const otherProjects = projects.filter((project) => !project.pinned);
-        const optionsFor = (items) => items.map((project) => `
-          <option value="${project.id}" ${project.id === selected ? "selected" : ""}>
-            ${project.pinned ? "[常用] " : ""}${escapeHtml(project.name)} - ${escapeHtml(project.path)}
-          </option>
-        `).join("");
-        $("projectSelect").innerHTML = `
-          <option value="">不绑定项目，手动填写路径</option>
-          ${favoriteProjects.length ? `<optgroup label="常用项目">${optionsFor(favoriteProjects)}</optgroup>` : ""}
-          ${otherProjects.length ? `<optgroup label="其他项目">${optionsFor(otherProjects)}</optgroup>` : ""}
-        `;
-      }
-
-      function renderProjects() {
-        $("projects").innerHTML = projects.length ? projects.map((project) => `
-          <div class="task">
-            <h3>${escapeHtml(project.name)}
-              ${project.pinned ? '<span class="pill favorite">常用</span>' : ""}
-            </h3>
-            <div class="meta">
-              path: ${escapeHtml(project.path)}<br />
-              ${project.notes ? `notes: ${escapeHtml(project.notes)}<br />` : ""}
-            </div>
-            <div class="actions">
-              <button onclick="editProject('${project.id}')">编辑</button>
-              <button onclick="useProject('${project.id}')">用于新任务</button>
-              <button onclick="toggleProjectPin('${project.id}')">${project.pinned ? "取消常用" : "固定常用"}</button>
-              <button class="danger" onclick="deleteProject('${project.id}')">删除</button>
-            </div>
-          </div>
-        `).join("") : `<p>还没有项目。先添加一个 repo 地址，任务里就能直接选择。</p>`;
-        renderProjectSelect($("projectSelect").value);
-      }
-
-      function escapeHtml(value) {
-        return String(value || "").replace(/[&<>"']/g, (ch) => ({
-          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-        }[ch]));
-      }
-
-      async function load() {
-        const [taskData, projectData] = await Promise.all([
-          fetch("/api/tasks").then((r) => r.json()),
-          fetch("/api/projects").then((r) => r.json())
-        ]);
-        tasks = taskData.tasks;
-        projects = projectData.projects;
-        renderProjects();
-        renderTasks();
-        loadLogs();
-      }
-
-      async function loadLogs() {
-        const data = await fetch("/api/logs").then((r) => r.json());
-        $("logs").innerHTML = data.logs.slice(0, 12).map((log) =>
-          `<button onclick="openLog('${log.file}')">${log.file}</button>`
-        ).join("") || "<p>暂无日志。</p>";
-      }
-
-      async function openLog(file) {
-        $("log-view").textContent = await fetch(`/api/logs/${encodeURIComponent(file)}`).then((r) => r.text());
-      }
-
-      function editTask(id) {
-        const task = tasks.find((item) => item.id === id);
-        if (!task) return;
-        $("form-title").textContent = "编辑任务";
-        $("task-id").value = task.id;
-        $("name").value = task.name;
-        renderProjectSelect(task.projectId || "");
-        $("cwd").value = task.cwd;
-        $("prompt").value = task.prompt;
-        $("commandTemplate").value = task.commandTemplate;
-        $("authCheckEnabled").checked = task.authCheckEnabled !== false;
-        $("authCheckCommand").value = task.authCheckCommand || "claude auth status";
-        $("authLoginCommand").value = task.authLoginCommand || "claude";
-        $("authTimeoutSeconds").value = task.authTimeoutSeconds || 300;
-        $("enabled").checked = task.enabled;
-        $("maxRuntimeMinutes").value = task.maxRuntimeMinutes;
-        $("scheduleType").value = task.schedule?.type || "manual";
-        renderScheduleFields(task.schedule || { type: "manual" });
-      }
-
-      function editProject(id) {
-        const project = projects.find((item) => item.id === id);
-        if (!project) return;
-        $("project-form-title").textContent = "编辑项目";
-        $("project-id").value = project.id;
-        $("projectName").value = project.name;
-        $("projectPath").value = project.path;
-        $("projectNotes").value = project.notes || "";
-        $("projectPinned").checked = Boolean(project.pinned);
-      }
-
-      function useProject(id) {
-        const project = projects.find((item) => item.id === id);
-        if (!project) return;
-        $("projectSelect").value = project.id;
-        $("cwd").value = project.path;
-      }
-
-      async function deleteProject(id) {
-        if (!confirm("删除这个项目？绑定到它的任务会变成手动路径。")) return;
-        await fetch(`/api/projects/${id}`, { method: "DELETE" });
-        load();
-      }
-
-      async function toggleProjectPin(id) {
-        const project = projects.find((item) => item.id === id);
-        if (!project) return;
-        await fetch(`/api/projects/${id}/pin`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ pinned: !project.pinned })
-        });
-        load();
-      }
-
-      async function runTaskNow(id) {
-        await fetch(`/api/tasks/${id}/run`, { method: "POST" });
-        setTimeout(load, 600);
-      }
-
-      async function toggleTask(id) {
-        const task = tasks.find((item) => item.id === id);
-        await fetch(`/api/tasks/${id}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ...task, enabled: !task.enabled })
-        });
-        load();
-      }
-
-      async function deleteTask(id) {
-        if (!confirm("删除这个任务？")) return;
-        await fetch(`/api/tasks/${id}`, { method: "DELETE" });
-        load();
-      }
-
-      $("scheduleType").addEventListener("change", () => renderScheduleFields({ type: $("scheduleType").value }));
-      $("projectSelect").addEventListener("change", () => {
-        const project = projects.find((item) => item.id === $("projectSelect").value);
-        if (project) $("cwd").value = project.path;
-      });
-
-      $("reset-project-form").addEventListener("click", () => {
-        $("project-form").reset();
-        $("project-id").value = "";
-        $("project-form-title").textContent = "本地项目";
-      });
-
-      $("reset-form").addEventListener("click", () => {
-        $("task-form").reset();
-        $("task-id").value = "";
-        $("form-title").textContent = "新建任务";
-        renderProjectSelect("");
-        renderScheduleFields({ type: "manual" });
-      });
-
-      $("project-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const id = $("project-id").value;
-        const payload = {
-          name: $("projectName").value,
-          path: $("projectPath").value,
-          notes: $("projectNotes").value,
-          pinned: $("projectPinned").checked
-        };
-        await fetch(id ? `/api/projects/${id}` : "/api/projects", {
-          method: id ? "PUT" : "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        $("reset-project-form").click();
-        load();
-      });
-
-      $("task-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const id = $("task-id").value;
-        const payload = {
-          name: $("name").value,
-          projectId: $("projectSelect").value,
-          cwd: $("cwd").value,
-          prompt: $("prompt").value,
-          commandTemplate: $("commandTemplate").value,
-          authCheckEnabled: $("authCheckEnabled").checked,
-          authCheckCommand: $("authCheckCommand").value,
-          authLoginCommand: $("authLoginCommand").value,
-          authTimeoutSeconds: Number($("authTimeoutSeconds").value || 300),
-          enabled: $("enabled").checked,
-          maxRuntimeMinutes: Number($("maxRuntimeMinutes").value || 90),
-          schedule: readSchedule()
-        };
-        await fetch(id ? `/api/tasks/${id}` : "/api/tasks", {
-          method: id ? "PUT" : "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        $("reset-form").click();
-        load();
-      });
-
-      renderScheduleFields({ type: "manual" });
-      load();
-      setInterval(load, 10_000);
-    </script>
-  </body>
+<script src="app.js"></script>
+</body>
 </html>
