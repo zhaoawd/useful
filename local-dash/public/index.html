@@ -244,9 +244,64 @@ body{
 .toast .dot{box-shadow:0 0 0 2px rgba(255,255,255,.2);}
 @keyframes toastin{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
 
+/* ---------------- Infra strip (stable infrastructure) ---------------- */
+.infra{padding:16px clamp(16px,4vw,40px) 0;}
+.infra-rail{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;}
+.pill{
+  display:inline-flex;align-items:center;gap:10px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 14px 8px 9px;
+  cursor:pointer;font:inherit;box-shadow:var(--shadow);transition:.15s var(--ease);text-align:left;
+}
+.pill:hover{border-color:var(--line-strong);transform:translateY(-1px);}
+.pill[aria-expanded="true"]{border-color:var(--gray-900);box-shadow:var(--shadow-lg);}
+.pill .pg{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff;font-size:16px;flex:none;}
+.pill .pg.mono{font-family:var(--code);font-weight:600;font-size:13px;letter-spacing:-.02em;}
+.pill .pmeta{display:flex;flex-direction:column;gap:1px;min-width:0;}
+.pill .pname{font-size:13.5px;font-weight:700;color:var(--ink);line-height:1.2;}
+.pill .pstat{font-size:11.5px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:6px;line-height:1.2;}
+.infra-detail{
+  margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow);overflow:hidden;animation:infrain .2s var(--ease);
+}
+@keyframes infrain{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
+.infra-detail .di-head{display:flex;align-items:center;gap:10px;padding:13px 16px 0;flex-wrap:wrap;}
+.infra-detail .di-title{font-size:14.5px;font-weight:700;color:var(--ink);}
+.infra-detail .di-sub{font-size:12px;color:var(--muted);font-family:var(--code);}
+.infra-detail .detail-in{padding:11px 16px 15px;}
+
+/* ---------------- Main board: task sidebar + project grid ---------------- */
+.board.two{justify-content:flex-start;gap:20px;max-width:1640px;margin-inline:auto;width:100%;}
+.board.two .col.tasks{flex:0 0 380px;max-width:380px;}
+.board.two .col.projects{flex:1 1 auto;min-width:300px;max-width:none;}
+/* projects flow into as many columns as fit; cards keep a comfortable width */
+.board.two .col.projects .col-body{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  gap:12px;align-items:start;
+}
+
+/* ---------------- Project run history ---------------- */
+.runs{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff;}
+.run{display:flex;align-items:center;gap:10px;padding:8px 11px;border-top:1px solid var(--line);font-size:12.5px;}
+.run:first-child{border-top:0;}
+.run .rtime{font-family:var(--code);font-size:11.5px;color:var(--muted);white-space:nowrap;flex:none;}
+.run .rname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--body);font-weight:500;}
+.run .rbadge{font-size:11px;font-weight:700;border-radius:var(--radius-full);padding:2px 8px;white-space:nowrap;flex:none;}
+.run .rbadge.ok{background:var(--green-100);color:var(--green-900);}
+.run .rbadge.err{background:var(--red-100);color:var(--red-900);}
+.run .rbadge.warn{background:var(--orange-100);color:var(--orange-900);}
+.run .rbadge.run{background:var(--blue-100);color:var(--blue-900);}
+.run .rbadge.idle{background:var(--gray-100);color:var(--gray-700);}
+.run .rlog{
+  border:0;background:transparent;font:inherit;font-size:11.5px;font-weight:600;color:var(--accent);
+  cursor:pointer;padding:2px 4px;border-radius:5px;flex:none;
+}
+.run .rlog:hover{background:var(--blue-100);}
+
 @media(max-width:920px){
   .board{flex-direction:column;overflow:visible;}
-  .col{width:100%;}
+  .board.two{gap:16px;}
+  .board.two .col,.col{width:100%;max-width:none;flex:1 1 auto;}
+  .board.two .col.tasks{flex:1 1 auto;}
   .appbar .stat-row{order:3;width:100%;}
 }
 </style>
@@ -278,10 +333,12 @@ body{
   <button class="btn primary" id="addTaskBtn"><svg class="icon"><use href="#i-add"/></svg>新建任务</button>
 </div>
 
+<div class="infra" id="infra"></div>
+
 <main class="board" id="board"></main>
 
 <div class="foot">
-  实时读取 claude-task-runner <code>/api/tasks</code> · <code>/api/projects</code> 与 keepalive-cc-codex <code>/api/keepalive</code> · 离线时回退到本地快照演示数据
+  实时读取 claude-task-runner <code>/api/tasks</code> · <code>/api/projects</code> · <code>/api/runs</code> 与 keepalive-cc-codex <code>/api/keepalive</code> · 离线时回退到本地快照演示数据
 </div>
 
 <!-- scrim + drawer -->

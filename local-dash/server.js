@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -407,6 +407,88 @@ async function readJson(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
+// Turn a single task log file into a structured run record by reading only its
+// head (task/cwd/reason header) and tail (terminal exit line) — logs can be large.
+async function parseRunLog(file) {
+  const full = path.join(logDir, file);
+  const empty = {
+    file,
+    startedAt: null,
+    finishedAt: null,
+    taskName: "",
+    cwd: "",
+    reason: "",
+    status: "unknown",
+    exitCode: null,
+    size: 0
+  };
+  let info;
+  try {
+    info = await stat(full);
+  } catch {
+    return empty;
+  }
+  let head = "";
+  let tail = "";
+  const fh = await open(full, "r").catch(() => null);
+  if (!fh) return { ...empty, size: info.size };
+  try {
+    const headLen = Math.min(info.size, 1024);
+    if (headLen > 0) {
+      const buf = Buffer.alloc(headLen);
+      await fh.read(buf, 0, headLen, 0);
+      head = buf.toString("utf8");
+    }
+    const tailLen = Math.min(info.size, 4096);
+    if (tailLen > 0) {
+      const buf = Buffer.alloc(tailLen);
+      await fh.read(buf, 0, tailLen, info.size - tailLen);
+      tail = buf.toString("utf8");
+    }
+  } finally {
+    await fh.close();
+  }
+
+  const line = (re) => (head.match(re)?.[1] || "").trim();
+  const startedAt = line(/^\[([^\]]+)\]\s+task=/m) || null;
+  const taskName = line(/\btask=(.*)/);
+  const cwd = line(/\bcwd=(.*)/);
+  const reason = line(/\breason=(.*)/);
+
+  // Status from the tail: the finish() line has no step label before "exit code".
+  let status = "running";
+  let exitCode = null;
+  let finishedAt = null;
+  if (/\]\s+auth (failed|recheck failed); task skipped/.test(tail)) {
+    status = "auth_failed";
+    finishedAt = tail.match(/\[([^\]]+)\]\s+auth (?:failed|recheck failed); task skipped/)?.[1] || null;
+  } else {
+    const tailLines = tail.split(/\r?\n/);
+    for (let i = tailLines.length - 1; i >= 0; i -= 1) {
+      const m = tailLines[i].match(/^\[([^\]]+)\]\s+exit code=(-?\d+)/);
+      if (m) {
+        finishedAt = m[1];
+        exitCode = Number(m[2]);
+        status = exitCode === 0 ? "success" : "failed";
+        break;
+      }
+      if (/^\[([^\]]+)\]\s+timeout after /.test(tailLines[i])) {
+        finishedAt = tailLines[i].match(/^\[([^\]]+)\]/)?.[1] || null;
+        status = "timeout";
+        break;
+      }
+    }
+    // No terminal line: still running if the file was touched recently and the
+    // task is live, otherwise it was interrupted (server restart, crash, kill).
+    if (status === "running") {
+      const stale = Date.now() - info.mtime.getTime() > 10 * 60_000;
+      if (stale) status = "interrupted";
+    }
+  }
+
+  return { file, startedAt, finishedAt, taskName, cwd, reason, status, exitCode, size: info.size };
+}
+
 function send(res, status, body, headers = {}) {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
   res.writeHead(status, {
@@ -592,6 +674,17 @@ async function handleApi(req, res, pathname) {
     return send(res, 202, { ok: true });
   }
 
+  if (pathname === "/api/runs" && req.method === "GET") {
+    const files = await readdir(logDir).catch(() => []);
+    const parsed = await Promise.all(
+      files.filter((file) => file.endsWith(".log")).map((file) => parseRunLog(file))
+    );
+    // Drop daemon/non-task logs (those have no task header → no startedAt).
+    const runs = parsed.filter((run) => run.startedAt);
+    runs.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+    return send(res, 200, { runs });
+  }
+
   if (pathname === "/api/logs" && req.method === "GET") {
     const files = await readdir(logDir);
     const logs = await Promise.all(
@@ -623,7 +716,11 @@ async function handleStatic(req, res, pathname) {
   if (!content) return send(res, 404, "Not found");
   const ext = path.extname(target);
   const type = ext === ".css" ? "text/css" : ext === ".js" ? "text/javascript" : "text/html";
-  res.writeHead(200, { "content-type": `${type}; charset=utf-8` });
+  res.writeHead(200, {
+    "content-type": `${type}; charset=utf-8`,
+    // Local dashboard: always revalidate so UI edits show up without a hard refresh.
+    "cache-control": "no-cache, must-revalidate"
+  });
   res.end(content);
 }
 

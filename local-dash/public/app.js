@@ -35,13 +35,19 @@ function esc(v){ return String(v ?? '').replace(/[&<>"']/g, (c)=>({'&':'&amp;','
 
 /* ---------- State ---------- */
 let MODE = 'live';                 // 'live' | 'demo'
-let system = null, tasks = [], projects = [], keepalive = { available:false, services:{} };
+let system = null, tasks = [], projects = [], runs = [], keepalive = { available:false, services:{} };
 let view = 'category', filter = 'all';
 const homeTilde = (p) => String(p||'').replace(/^\/Users\/[^/]+/, '~');
 
 const STATUS = {
   run:{label:'运行中',cls:'run'}, ok:{label:'正常',cls:'ok'},
   warn:{label:'需关注',cls:'warn'}, err:{label:'异常',cls:'err'}, idle:{label:'已停用',cls:'idle'}
+};
+// run-history status (from /api/runs) → board status class
+const RUN_STATUS = {
+  success:{cls:'ok',label:'成功'}, failed:{cls:'err',label:'失败'},
+  auth_failed:{cls:'warn',label:'登录失败'}, timeout:{cls:'err',label:'超时'},
+  running:{cls:'run',label:'运行中'}, interrupted:{cls:'idle',label:'中断'}, unknown:{cls:'idle',label:'未知'}
 };
 
 /* ---------- Demo snapshot (mirrors data/*.json + keepalive sample) ---------- */
@@ -75,6 +81,14 @@ function demoData(){
       { id:'p-pidata', name:'pi-data', path:'/Users/kolar/github/pi-data', notes:'', pinned:true },
       { id:'p-autophone', name:'autophone', path:'/Users/kolar/github/autophone', notes:'', pinned:true }
     ],
+    runs:[
+      { file:'2026-06-02T03-09-15-407Z--M3-M6.log', startedAt:'2026-06-02T03:09:15.407Z', finishedAt:'2026-06-02T03:12:05.734Z',
+        taskName:'继续M3-M6', cwd:'/Users/kolar/github/pi-data', reason:'scheduled', status:'success', exitCode:0, size:3616 },
+      { file:'2026-06-01T17-15-11-394Z--M3-M6.log', startedAt:'2026-06-01T17:15:11.395Z', finishedAt:null,
+        taskName:'继续M3-M6', cwd:'/Users/kolar/github/pi-data', reason:'scheduled', status:'interrupted', exitCode:null, size:762 },
+      { file:'2026-06-01T16-42-11-176Z--.log', startedAt:'2026-06-01T16:42:11.178Z', finishedAt:'2026-06-01T16:47:47.465Z',
+        taskName:'继续未完成', cwd:'/Users/kolar/github/autophone', reason:'scheduled', status:'success', exitCode:0, size:3033 }
+    ],
     keepalive:{ available:true, logFile:'~/.local/var/log/keepalive-cc-codex.log',
       services:{
         claude:{ status:'err', exitCode:1, variant:'haiku', note:'403 Request not allowed', nextEpoch: now + 28*60 },
@@ -92,14 +106,14 @@ async function getJSON(url){
 
 async function load(){
   try{
-    const [sys, t, p, k] = await Promise.all([
-      getJSON('/api/system'), getJSON('/api/tasks'), getJSON('/api/projects'), getJSON('/api/keepalive')
+    const [sys, t, p, r, k] = await Promise.all([
+      getJSON('/api/system'), getJSON('/api/tasks'), getJSON('/api/projects'), getJSON('/api/runs'), getJSON('/api/keepalive')
     ]);
-    system = sys; tasks = t.tasks || []; projects = p.projects || []; keepalive = k || keepalive;
+    system = sys; tasks = t.tasks || []; projects = p.projects || []; runs = r.runs || []; keepalive = k || keepalive;
     MODE = 'live';
   }catch(e){
     const d = demoData();
-    system = d.system; tasks = d.tasks; projects = d.projects; keepalive = d.keepalive;
+    system = d.system; tasks = d.tasks; projects = d.projects; runs = d.runs; keepalive = d.keepalive;
     MODE = 'demo';
   }
   renderAll();
@@ -169,17 +183,51 @@ function detailBlock({desc, kv, note, code, codeLabel, codeDark, actions}){
   return `${desc?`<p style="margin:0;font-size:12.5px;color:var(--body);line-height:1.55">${esc(desc)}</p>`:''}${kvHtml}${noteHtml}${codeHtml}${actHtml}`;
 }
 
-/* ----- column builders ----- */
-function toolsCards(){
+/* ----- infra (stable infrastructure) builders ----- */
+// Returns config objects usable both as compact pills and (in status view) as full cards.
+function infraItems(){
   const ka = keepalive.services || {};
   const kaWorst = ['err','warn','ok'].find(s => ka.claude?.status===s || ka.codex?.status===s) || 'idle';
   const runnerUp = MODE==='live';
+  const kaItem = (name, label, sub, svc, bg) => {
+    const status = svc?.status || 'idle';
+    const badgeMap = {ok:'正常',warn:'间歇',err:'受阻',idle:'无数据'};
+    return {
+      id:'ka-'+name, status,
+      glyph:{mono: name==='claude'?'CC':'cx', bg},
+      title:label, sub,
+      badge: svc?.note ? (svc.note.length>10?badgeMap[status]:svc.note) : badgeMap[status],
+      statText: svc?.nextEpoch ? '' : (svc?.exitCode!=null?`exit=${svc.exitCode}`:''),
+      meta: metaRows([
+        ['最近', valText(svc?.note || (svc?.exitCode!=null?`exit=${svc.exitCode}`:'—'))],
+        svc?.variant?['模式', valText(svc.variant)]:null,
+        svc?.nextEpoch?['下次', cdSpan(svc.nextEpoch)]:['下次', valText('—')]
+      ]),
+      detail: detailBlock({
+        desc: name==='claude'
+          ? '普通终端 claude -p 可成功，但 launchd/背景执行可能返回 403。state 文件与 Codex 独立。'
+          : 'launchd 下整体可成功；偶发 websocket 重连失败时 30 分钟后重试。',
+        kv:[
+          ['上次结果', svc?.exitCode!=null?`exit=${svc.exitCode}`:'—'],
+          svc?.note?['说明', svc.note]:null,
+          ['退避', status==='ok'?'5h1m':'30 分钟重试']
+        ],
+        code: name==='claude'?'claude setup-token':'launchctl print gui/$(id -u)/com.kolar.keepalive-cc-codex',
+        codeLabel: name==='claude'?'修复建议':'查看状态',
+        actions:[
+          {act:'kalog',icon:'download',label:'查看日志'},
+          name==='claude'?{act:'copy',arg:'claude setup-token',icon:'copy',label:'复制修复命令'}:null
+        ].filter(Boolean)
+      })
+    };
+  };
   return [
-    cardShell({
+    {
       id:'tool-runner', status: runnerUp?'run':'warn',
       glyph:{icon:'send', bg:'linear-gradient(135deg,#1473e6,#0d66d0)'},
       title:'Claude Task Runner', sub:`localhost:${system?.port||4321} · LaunchAgent`,
       badge: runnerUp?'运行中':'离线',
+      statText: `${system?.runningCount??tasks.filter(t=>t.running).length} 运行 · ${system?.taskCount??tasks.length} 任务`,
       meta: metaRows([
         ['类型', valText('Web 配置 + 调度')],
         ['任务', valText(`${system?.taskCount??tasks.length} 个 · ${system?.enabledCount??tasks.filter(t=>t.enabled).length} 启用`)],
@@ -191,12 +239,13 @@ function toolsCards(){
         code:'claude --print "$TASK_PROMPT" --permission-mode acceptEdits', codeLabel:'默认命令模板',
         actions:[{act:'copy',arg:'npm start',icon:'copy',label:'复制启动命令'},{act:'copy',arg:'npm run install-daemon',icon:'copy',label:'复制常驻命令'}]
       })
-    }),
-    cardShell({
+    },
+    {
       id:'tool-keepalive', status: kaWorst,
       glyph:{icon:'bell', bg:'linear-gradient(135deg,#da7b11,#bd5b00)'},
       title:'keepalive-cc-codex', sub:'LaunchAgent · 保活进程',
       badge: kaWorst==='err'?'需关注':(kaWorst==='warn'?'间歇':'运行中'),
+      statText:'用量窗口保活',
       meta: metaRows([
         ['类型', valText('用量窗口保活')],
         ['Claude', valText(ka.claude?.note || (ka.claude?.status==='ok'?'正常':'—'))],
@@ -209,8 +258,25 @@ function toolsCards(){
         codeLabel:'重载 LaunchAgent', codeDark:true,
         actions:[{act:'kalog',icon:'download',label:'查看保活日志'},{act:'copy',arg:'launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.kolar.keepalive-cc-codex.plist 2>/dev/null || true\nlaunchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kolar.keepalive-cc-codex.plist',icon:'copy',label:'复制重载命令'}]
       })
-    })
+    },
+    kaItem('claude','Claude','claude (haiku) · launchd', ka.claude, 'linear-gradient(135deg,#d7373f,#c9252d)'),
+    kaItem('codex','Codex','codex (gpt-5.4, low) · launchd', ka.codex, 'linear-gradient(135deg,#2d9d78,#12805c)')
   ];
+}
+
+/* compact pill for the infra strip */
+function infraPill(it){
+  const st = STATUS[it.status] || STATUS.idle;
+  const g = it.glyph.mono
+    ? `<span class="pg mono" style="background:${it.glyph.bg}">${esc(it.glyph.mono)}</span>`
+    : `<span class="pg" style="background:${it.glyph.bg}">${iconSvg(it.glyph.icon)}</span>`;
+  return `<button class="pill" data-infra="${it.id}" aria-expanded="false">
+    ${g}
+    <span class="pmeta">
+      <span class="pname">${esc(it.title)}</span>
+      <span class="pstat"><span class="dot ${st.cls}"></span>${esc(it.badge||st.label)}${it.statText?` · ${esc(it.statText)}`:''}</span>
+    </span>
+  </button>`;
 }
 
 function taskCard(t){
@@ -251,10 +317,49 @@ function taskCard(t){
   });
 }
 
+// Runs that belong to this project — matched by resolved cwd (logs record it),
+// newest first. cwd is the robust link (task names can change / collapse in filenames).
+function runsForProject(p){
+  return runs
+    .filter(r => r.cwd && (r.cwd===p.path || homeTilde(r.cwd)===homeTilde(p.path)))
+    .sort((a,b)=> String(b.startedAt).localeCompare(String(a.startedAt)));
+}
+function runTime(iso){
+  if (!iso) return '—';
+  const d = new Date(iso); if (isNaN(d)) return '—';
+  const p = n=>String(n).padStart(2,'0');
+  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function runRow(r){
+  const rs = RUN_STATUS[r.status] || RUN_STATUS.unknown;
+  return `<div class="run">
+    <span class="rtime">${runTime(r.startedAt)}</span>
+    <span class="rname">${esc(r.taskName||'—')}</span>
+    <span class="rbadge ${rs.cls}">${esc(rs.label)}</span>
+    ${r.file?`<button class="rlog" data-act="log" data-arg="${esc(r.file)}">日志</button>`:''}
+  </div>`;
+}
+
 function projectCard(p){
   const linked = tasks.filter(t=>t.projectId===p.id).map(t=>t.name);
+  const pruns = runsForProject(p);
+  const latest = pruns[0];
   const palette = ['#3c3c3c,#222','#2d9d78,#12805c','#6767ec,#4b4bd6','#d83790,#c038cc','#2680eb,#0d66d0','#da7b11,#bd5b00'];
   const bg = 'linear-gradient(135deg,'+palette[(p.name||'').length % palette.length]+')';
+  const latestStatus = latest ? (RUN_STATUS[latest.status]||RUN_STATUS.unknown) : null;
+  const runsHtml = pruns.length
+    ? `<div class="runs">${pruns.map(runRow).join('')}</div>`
+    : `<div class="empty" style="padding:12px">该项目暂无运行记录</div>`;
+  const actions = [
+    {act:'use-project',icon:'add',label:'用于新任务'},
+    {act:'edit-project',icon:'edit',label:'编辑'},
+    {act:'pin-project',icon:'pin',label:p.pinned?'取消常用':'固定常用'},
+    {act:'del-project',icon:'trash',label:'删除',danger:true}
+  ];
+  const detail = `
+    ${linked.length?`<div><div class="dlabel">关联任务</div><p style="margin:0;font-size:12.5px;color:var(--body)">${esc(linked.join('、'))}</p></div>`:''}
+    <div><div class="dlabel">运行历史 · 时间倒序 (${pruns.length})</div>${runsHtml}</div>
+    <div class="dactions">${actions.map(a=>`<button class="mini ${a.danger?'danger':''}" data-act="${a.act}" data-arg="${esc(a.arg||'')}">${iconSvg(a.icon)}${esc(a.label)}</button>`).join('')}</div>`;
   return cardShell({
     id:p.id, status:'ok',
     glyph:{icon: p.path==='/Users/kolar'?'home':'folder', bg},
@@ -262,105 +367,93 @@ function projectCard(p){
     badge: p.pinned?'常用':'项目',
     meta: metaRows([
       ['路径', valText(homeTilde(p.path), true)],
-      linked.length?['关联', valText(linked.join('、'))]:['备注', valText(p.notes||'—')]
+      pruns.length
+        ? ['运行', `<span class="v"><span class="dot ${latestStatus.cls}" style="display:inline-block;margin-right:6px;vertical-align:-1px"></span>${pruns.length} 次 · 最近 ${esc(runTime(latest.startedAt))} ${esc(latestStatus.label)}</span>`]
+        : (linked.length?['关联', valText(linked.join('、'))]:['备注', valText(p.notes||'—')])
     ]),
-    detail: detailBlock({
-      desc: p.notes||'',
-      kv:[['完整路径', p.path],['固定', p.pinned?'常用项目':'否'], linked.length?['关联任务', linked.join('、')]:null],
-      actions:[
-        {act:'use-project',icon:'add',label:'用于新任务'},
-        {act:'edit-project',icon:'edit',label:'编辑'},
-        {act:'pin-project',icon:'pin',label:p.pinned?'取消常用':'固定常用'},
-        {act:'del-project',icon:'trash',label:'删除',danger:true}
-      ]
-    })
-  });
-}
-
-function keepaliveCard(name, label, sub, svc, bg){
-  const status = svc?.status || 'idle';
-  const badgeMap = {ok:'正常',warn:'间歇',err:'受阻',idle:'无数据'};
-  return cardShell({
-    id:'ka-'+name, status,
-    glyph:{mono: name==='claude'?'CC':'cx', bg},
-    title:label, sub,
-    badge: svc?.note ? (svc.note.length>10?badgeMap[status]:svc.note) : badgeMap[status],
-    meta: metaRows([
-      ['最近', valText(svc?.note || (svc?.exitCode!=null?`exit=${svc.exitCode}`:'—'))],
-      svc?.variant?['模式', valText(svc.variant)]:null,
-      svc?.nextEpoch?['下次', cdSpan(svc.nextEpoch)]:['下次', valText('—')]
-    ]),
-    detail: detailBlock({
-      desc: name==='claude'
-        ? '普通终端 claude -p 可成功，但 launchd/背景执行可能返回 403。state 文件与 Codex 独立。'
-        : 'launchd 下整体可成功；偶发 websocket 重连失败时 30 分钟后重试。',
-      kv:[
-        ['上次结果', svc?.exitCode!=null?`exit=${svc.exitCode}`:'—'],
-        svc?.note?['说明', svc.note]:null,
-        ['退避', status==='ok'?'5h1m':'30 分钟重试']
-      ],
-      code: name==='claude'?'claude setup-token':'launchctl print gui/$(id -u)/com.kolar.keepalive-cc-codex',
-      codeLabel: name==='claude'?'修复建议':'查看状态',
-      actions:[
-        {act:'kalog',icon:'download',label:'查看日志'},
-        name==='claude'?{act:'copy',arg:'claude setup-token',icon:'copy',label:'复制修复命令'}:null
-      ].filter(Boolean)
-    })
+    detail
   });
 }
 
 /* ---------- Board render ---------- */
-const COLUMNS = [
-  {id:'tools', name:'编程工具', icon:'settings', color:'#3c3c3c'},
-  {id:'tasks', name:'定时任务', icon:'send', color:'#1473e6'},
-  {id:'keepalive', name:'保活服务', icon:'bell', color:'#bd5b00'},
-  {id:'projects', name:'本地项目', icon:'folder', color:'#12805c'}
-];
 // settings icon path (board head) reuse refresh-ish; map to existing
 ICONS.settings = ICONS.refresh;
 
-function columnCards(colId){
-  if (colId==='tools') return toolsCards();
-  if (colId==='tasks') return tasks.map(taskCard);
-  if (colId==='keepalive') return [
-    keepaliveCard('claude','Claude','claude (haiku) · launchd', keepalive.services?.claude, 'linear-gradient(135deg,#d7373f,#c9252d)'),
-    keepaliveCard('codex','Codex','codex (gpt-5.4, low) · launchd', keepalive.services?.codex, 'linear-gradient(135deg,#2d9d78,#12805c)')
-  ];
-  if (colId==='projects') return projects.map(projectCard);
-  return [];
-}
 function cardStatusOf(html){ const m = html.match(/data-status="([^"]+)"/); return m?m[1]:'idle'; }
+
+// One column section, with status-based dimming applied.
+function colSection(col){
+  const cards = col.cards.map(h=>{
+    const dim = (filter!=='all' && cardStatusOf(h)!==filter) ? ' dim':'';
+    return dim ? h.replace('class="card', 'class="card'+dim) : h;
+  }).join('');
+  const add = col.add ? `<button class="add-card" data-add="${col.add}">${iconSvg('add')}${col.addLabel}</button>` : '';
+  return `<section class="col${col.cls?' '+col.cls:''}">
+    <div class="col-head">
+      <div class="ci" style="background:${col.color}">${iconSvg(col.icon)}</div>
+      <h2>${col.name}</h2>
+      <span class="count">${col.cards.length}</span>
+    </div>
+    <div class="col-body">
+      ${cards || `<div class="empty">暂无${col.name}</div>`}
+      ${add}
+    </div>
+  </section>`;
+}
+
+let infraCache = [];
+let openInfraId = null;
+
+function renderInfra(){
+  infraCache = infraItems();
+  $('infra').innerHTML =
+    `<div class="infra-rail">${infraCache.map(infraPill).join('')}</div>` +
+    `<div class="infra-detail" id="infraDetail" hidden></div>`;
+}
+function openInfra(id){
+  const panel = $('infraDetail'); if (!panel) return;
+  const it = infraCache.find(x=>x.id===id);
+  document.querySelectorAll('.pill').forEach(x=>x.setAttribute('aria-expanded', String(x.dataset.infra===id && !!it)));
+  if (!it){ panel.hidden=true; panel.innerHTML=''; openInfraId=null; return; }
+  const st = STATUS[it.status] || STATUS.idle;
+  panel.innerHTML = `<div class="di-head">
+      <span class="badge ${st.cls}"><span class="dot ${st.cls}"></span>${esc(it.badge||st.label)}</span>
+      <strong class="di-title">${esc(it.title)}</strong>
+      <span class="di-sub">${esc(it.sub||'')}</span>
+    </div><div class="detail-in">${it.detail}</div>`;
+  panel.hidden=false; openInfraId=id; bindActionButtons(panel);
+}
+function bindInfra(){
+  document.querySelectorAll('.pill').forEach(p=>p.addEventListener('click', ()=>{
+    const id = p.dataset.infra;
+    openInfra(openInfraId===id ? null : id);
+  }));
+  if (openInfraId) openInfra(openInfraId);  // keep panel open across refreshes
+}
 
 function renderBoard(){
   const board = $('board');
-  let cols;
   if (view==='category'){
-    cols = COLUMNS.map(c => ({...c, cards: columnCards(c.id), addable: c.id==='tasks'||c.id==='projects', addLabel: c.id==='tasks'?'新建任务':'新建项目'}));
+    $('infra').hidden = false;
+    renderInfra();
+    board.classList.add('two');
+    const cols = [
+      {id:'tasks', cls:'tasks', name:'定时任务', icon:'send', color:'#1473e6', cards: tasks.map(taskCard), add:'tasks', addLabel:'新建任务'},
+      {id:'projects', cls:'projects', name:'本地项目', icon:'folder', color:'#12805c', cards: projects.map(projectCard), add:'projects', addLabel:'新建项目'}
+    ];
+    board.innerHTML = cols.map(colSection).join('');
   } else {
+    $('infra').hidden = true; $('infra').innerHTML=''; openInfraId=null;
+    board.classList.remove('two');
     const order=[['run','运行中','#2680eb','send'],['err','异常','#c9252d','bell'],['warn','需关注','#da7b11','bell'],['ok','正常','#12805c','folder'],['idle','已停用','#9f9f9f','settings']];
-    const all = COLUMNS.flatMap(c=>columnCards(c.id));
-    cols = order.map(([sid,name,color,icon])=>({id:sid,name,color,icon,cards: all.filter(h=>cardStatusOf(h)===sid)})).filter(c=>c.cards.length);
+    const all = [...infraItems().map(cardShell), ...tasks.map(taskCard), ...projects.map(projectCard)];
+    const cols = order
+      .map(([sid,name,color,icon])=>({id:sid,name,color,icon,cards: all.filter(h=>cardStatusOf(h)===sid)}))
+      .filter(c=>c.cards.length);
+    board.innerHTML = cols.map(colSection).join('');
   }
-  board.innerHTML = cols.map(col=>{
-    const cards = col.cards.map(h=>{
-      const dim = (filter!=='all' && cardStatusOf(h)!==filter) ? ' dim':'';
-      return dim ? h.replace('class="card', 'class="card'+dim) : h;
-    }).join('');
-    const add = (view==='category' && col.addable) ? `<button class="add-card" data-add="${col.id}">${iconSvg('add')}${col.addLabel}</button>` : '';
-    const body = cards || (view==='category' ? '' : '') ;
-    return `<section class="col">
-      <div class="col-head">
-        <div class="ci" style="background:${col.color}">${iconSvg(col.icon)}</div>
-        <h2>${col.name}</h2>
-        <span class="count">${col.cards.length}</span>
-      </div>
-      <div class="col-body">
-        ${body || `<div class="empty">暂无${col.name}</div>`}
-        ${add}
-      </div>
-    </section>`;
-  }).join('');
   bindCards();
+  if (view==='category') bindInfra();
 }
 
 function renderStats(){
@@ -399,6 +492,19 @@ async function copyText(text){
 }
 
 /* ---------- Card interactions ---------- */
+// Bind [data-act] buttons within a scope; idempotent so the infra panel (rendered
+// after the board) can be bound separately without double-firing board buttons.
+function bindActionButtons(scope=document){
+  scope.querySelectorAll('[data-act]').forEach(b=>{
+    if (b._actBound) return;
+    b._actBound = true;
+    b.addEventListener('click', e=>{
+      e.stopPropagation();
+      const card = b.closest('.card'); const id = card?.dataset.id;
+      handleAction(b.dataset.act, id, b.dataset.arg, b);
+    });
+  });
+}
 function bindCards(){
   document.querySelectorAll('[data-toggle]').forEach(el=>el.addEventListener('click', e=>{
     if (e.target.closest('[data-switch]') || e.target.closest('[data-act]')) return;
@@ -414,12 +520,7 @@ function bindCards(){
     if (which==='tasks') openTaskDrawer();
     else openProjectDrawer();
   }));
-  document.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click', e=>{
-    e.stopPropagation();
-    const card = b.closest('.card'); const id = card?.dataset.id;
-    const act = b.dataset.act, arg = b.dataset.arg;
-    handleAction(act, id, arg, b);
-  }));
+  bindActionButtons(document);
 }
 
 function handleAction(act, id, arg, btn){
