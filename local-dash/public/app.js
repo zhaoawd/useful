@@ -36,25 +36,66 @@ function esc(v){ return String(v ?? '').replace(/[&<>"']/g, (c)=>({'&':'&amp;','
 /* ---------- State ---------- */
 let MODE = 'live';                 // 'live' | 'demo'
 let system = null, tasks = [], projects = [], runs = [], keepalive = { available:false, services:{} };
+let loadError = null, lastLoadedAt = null;
 let view = 'category', filter = 'all';
 const homeTilde = (p) => String(p||'').replace(/^\/Users\/[^/]+/, '~');
 
 const STATUS = {
   run:{label:'运行中',cls:'run'}, ok:{label:'正常',cls:'ok'},
+  limit:{label:'额度待重置',cls:'limit'}, pending:{label:'待运行',cls:'pending'},
   warn:{label:'需关注',cls:'warn'}, err:{label:'异常',cls:'err'}, idle:{label:'已停用',cls:'idle'}
 };
+
+/* ---------- Task executors (engine presets) ---------- */
+const EXECUTORS = {
+  claude:{ label:'Claude Code', command:'claude --print "$TASK_PROMPT" --permission-mode acceptEdits',
+    authCheckEnabled:true, authCheck:'claude auth status', authLogin:'claude' },
+  codex:{ label:'Codex', command:'codex exec --full-auto "$TASK_PROMPT"',
+    authCheckEnabled:true, authCheck:'codex login status', authLogin:'codex login' },
+  custom:{ label:'自定义命令' }
+};
+const execLabel = (e)=> (EXECUTORS[e]?.label) || EXECUTORS.claude.label;
 // run-history status (from /api/runs) → board status class
 const RUN_STATUS = {
   success:{cls:'ok',label:'成功'}, failed:{cls:'err',label:'失败'},
   auth_failed:{cls:'warn',label:'登录失败'}, timeout:{cls:'err',label:'超时'},
   running:{cls:'run',label:'运行中'}, interrupted:{cls:'idle',label:'中断'}, unknown:{cls:'idle',label:'未知'}
 };
+// engine presets shared by project badges + engine status panel
+const ENGINE_META = {
+  claude:{label:'Claude', mono:'CC', cls:'cc'},
+  codex:{label:'Codex', mono:'cx', cls:'cx'}
+};
+function relTime(iso){
+  if(!iso) return '';
+  const d=new Date(iso); if(isNaN(d)) return '';
+  const s=(Date.now()-d.getTime())/1000;
+  if(s<90) return '刚刚';
+  if(s<3600) return Math.floor(s/60)+' 分钟前';
+  if(s<86400) return Math.floor(s/3600)+' 小时前';
+  if(s<86400*30) return Math.floor(s/86400)+' 天前';
+  return runTime(iso);
+}
+// Render which engines (Claude / Codex) have touched a project, newest activity first.
+function engineChips(engines){
+  const eng = engines||[];
+  if(!eng.length) return valText('—');
+  const chips = eng.map(e=>{
+    const m=ENGINE_META[e.engine]||{cls:'off',mono:e.engine};
+    return `<span class="echip ${m.cls}" title="${esc(m.label||e.engine)} · ${esc(relTime(e.at))}">${esc(m.mono)}</span>`;
+  }).join(' ');
+  return `<span class="v">${chips} <span style="color:var(--muted)">最近 ${esc(relTime(eng[0].at))}</span></span>`;
+}
 
 /* ---------- Demo snapshot (mirrors data/*.json + keepalive sample) ---------- */
 function demoData(){
   const now = Math.floor(Date.now()/1000);
   return {
-    system:{ port:4321, runningCount:0, taskCount:2, enabledCount:1, projectCount:6 },
+    system:{ port:4321, runningCount:0, taskCount:2, enabledCount:1, projectCount:6,
+      engines:{
+        claude:{ activeProjects:6, lastActiveAt:new Date((now-40*60)*1000).toISOString(), taskCount:2 },
+        codex:{ activeProjects:3, lastActiveAt:new Date((now-6*3600)*1000).toISOString(), taskCount:0 }
+      } },
     tasks:[
       { id:'demo-autophone', name:'继续未完成', projectId:'p-autophone', projectName:'autophone',
         cwd:'/Users/kolar/github/autophone', resolvedCwd:'/Users/kolar/github/autophone',
@@ -74,12 +115,18 @@ function demoData(){
         lastStatus:'success', lastRunAt:'2026-06-02T03:09:15.407Z', lastLog:'2026-06-02T03-09-15-407Z--M3-M6.log', nextRunAt:null }
     ],
     projects:[
-      { id:'p-home', name:'home', path:'/Users/kolar', notes:'Imported from Claude trusted projects', pinned:true },
-      { id:'p-datage', name:'data_ge_new', path:'/Users/kolar/github/data_ge_new', notes:'Imported from Claude trusted projects', pinned:true },
-      { id:'p-linear', name:'linear-manage', path:'/Users/kolar/github/linear-manage', notes:'Imported from Claude trusted projects', pinned:true },
-      { id:'p-multica', name:'multica', path:'/Users/kolar/github/multica', notes:'', pinned:true },
-      { id:'p-pidata', name:'pi-data', path:'/Users/kolar/github/pi-data', notes:'', pinned:true },
-      { id:'p-autophone', name:'autophone', path:'/Users/kolar/github/autophone', notes:'', pinned:true }
+      { id:'p-home', name:'home', path:'/Users/kolar', notes:'Imported from Claude trusted projects', pinned:true,
+        engines:[{engine:'claude',at:new Date((now-40*60)*1000).toISOString()}] },
+      { id:'p-datage', name:'data_ge_new', path:'/Users/kolar/github/data_ge_new', notes:'Imported from Claude trusted projects', pinned:true,
+        engines:[{engine:'codex',at:new Date((now-6*3600)*1000).toISOString()},{engine:'claude',at:new Date((now-9*3600)*1000).toISOString()}] },
+      { id:'p-linear', name:'linear-manage', path:'/Users/kolar/github/linear-manage', notes:'Imported from Claude trusted projects', pinned:true,
+        engines:[{engine:'claude',at:new Date((now-3*86400)*1000).toISOString()}] },
+      { id:'p-multica', name:'multica', path:'/Users/kolar/github/multica', notes:'', pinned:true,
+        engines:[{engine:'claude',at:new Date((now-2*86400)*1000).toISOString()},{engine:'codex',at:new Date((now-2.5*86400)*1000).toISOString()}] },
+      { id:'p-pidata', name:'pi-data', path:'/Users/kolar/github/pi-data', notes:'', pinned:true,
+        engines:[{engine:'claude',at:new Date((now-50*60)*1000).toISOString()}] },
+      { id:'p-autophone', name:'autophone', path:'/Users/kolar/github/autophone', notes:'', pinned:true,
+        engines:[{engine:'claude',at:new Date((now-40*60)*1000).toISOString()},{engine:'codex',at:new Date((now-13*3600)*1000).toISOString()}] }
     ],
     runs:[
       { file:'2026-06-02T03-09-15-407Z--M3-M6.log', startedAt:'2026-06-02T03:09:15.407Z', finishedAt:'2026-06-02T03:12:05.734Z',
@@ -89,10 +136,26 @@ function demoData(){
       { file:'2026-06-01T16-42-11-176Z--.log', startedAt:'2026-06-01T16:42:11.178Z', finishedAt:'2026-06-01T16:47:47.465Z',
         taskName:'继续未完成', cwd:'/Users/kolar/github/autophone', reason:'scheduled', status:'success', exitCode:0, size:3033 }
     ],
-    keepalive:{ available:true, logFile:'~/.local/var/log/keepalive-cc-codex.log',
+    keepalive:{ available:true, logFile:'~/.local/var/log/keepalive-cc-codex.log', windowSeconds:18060,
       services:{
-        claude:{ status:'err', exitCode:1, variant:'haiku', note:'403 Request not allowed', nextEpoch: now + 28*60 },
-        codex:{ status:'warn', exitCode:124, variant:'gpt-5.4, low effort', note:'间歇 websocket 重连', nextEpoch: now + 52*60 }
+        claude:{ status:'err', exitCode:1, variant:'haiku', note:'403 Request not allowed', nextEpoch: now + 28*60,
+          windowSeconds:18060, tokens:null, elapsedSeconds:3, lastSuccessAt:new Date((now-5*3600)*1000).toISOString(),
+          stats:{count:6, ok:1, warn:0, err:5, failStreak:3, totalTokens:0, avgTokens:null, lastSuccessAt:new Date((now-5*3600)*1000).toISOString()},
+          sessions:[
+            { at:new Date((now-28*60)*1000).toISOString(), exitCode:1, elapsedSeconds:3, tokens:null, status:'err', note:'403 Request not allowed', reason:'retry', nextEpoch: now+2*60 },
+            { at:new Date((now-58*60)*1000).toISOString(), exitCode:1, elapsedSeconds:4, tokens:null, status:'err', note:'403 Request not allowed', reason:'retry', nextEpoch: now-28*60 },
+            { at:new Date((now-88*60)*1000).toISOString(), exitCode:124, elapsedSeconds:136, tokens:null, status:'warn', note:'超时 (124)', reason:'retry', nextEpoch: now-58*60 },
+            { at:new Date((now-5*3600)*1000).toISOString(), exitCode:0, elapsedSeconds:6, tokens:null, status:'ok', note:'', reason:'success', nextEpoch: now+1*60 }
+          ]},
+        codex:{ status:'ok', exitCode:0, variant:'gpt-5.4, low effort', note:'', nextEpoch: now + 52*60,
+          windowSeconds:18060, tokens:11298, elapsedSeconds:11, lastSuccessAt:new Date((now-2*60)*1000).toISOString(),
+          stats:{count:6, ok:4, warn:2, err:0, failStreak:0, totalTokens:45200, avgTokens:11300, lastSuccessAt:new Date((now-2*60)*1000).toISOString()},
+          sessions:[
+            { at:new Date((now-2*60)*1000).toISOString(), exitCode:0, elapsedSeconds:11, tokens:11298, status:'ok', note:'', reason:'success', nextEpoch: now+52*60 },
+            { at:new Date((now-5*3600)*1000).toISOString(), exitCode:0, elapsedSeconds:14, tokens:11288, status:'ok', note:'', reason:'success', nextEpoch: now-2*60 },
+            { at:new Date((now-6*3600)*1000).toISOString(), exitCode:1, elapsedSeconds:40, tokens:null, status:'warn', note:'websocket 重连失败', reason:'retry', nextEpoch: now-5*3600 },
+            { at:new Date((now-10*3600)*1000).toISOString(), exitCode:0, elapsedSeconds:118, tokens:11393, status:'ok', note:'', reason:'success', nextEpoch: now-6*3600 }
+          ]}
       }}
   };
 }
@@ -110,11 +173,11 @@ async function load(){
       getJSON('/api/system'), getJSON('/api/tasks'), getJSON('/api/projects'), getJSON('/api/runs'), getJSON('/api/keepalive')
     ]);
     system = sys; tasks = t.tasks || []; projects = p.projects || []; runs = r.runs || []; keepalive = k || keepalive;
-    MODE = 'live';
+    MODE = 'live'; loadError = null; lastLoadedAt = new Date();
   }catch(e){
     const d = demoData();
     system = d.system; tasks = d.tasks; projects = d.projects; runs = d.runs; keepalive = d.keepalive;
-    MODE = 'demo';
+    MODE = 'demo'; loadError = e; lastLoadedAt = new Date();
   }
   renderAll();
 }
@@ -124,8 +187,8 @@ function taskStatus(t){
   if (t.running) return {status:'run',label:'运行中'};
   if (!t.enabled) return {status:'idle',label:'已停用'};
   const m = { success:{status:'ok',label:'上次成功'}, failed:{status:'err',label:'上次失败'},
-              auth_failed:{status:'warn',label:'登录失败'}, never:{status:'ok',label:'待运行'} };
-  return m[t.lastStatus] || {status:'ok',label:t.lastStatus||'待运行'};
+              auth_failed:{status:'warn',label:'登录失败'}, never:{status:'pending',label:'待运行'} };
+  return m[t.lastStatus] || {status:'pending',label:'待运行'};
 }
 function scheduleText(s){
   if (!s || s.type==='manual') return '仅手动';
@@ -175,23 +238,68 @@ function cardShell({id, status, glyph, title, sub, badge, sw, meta, detail, busy
     ${detail?`<div class="detail"><div class="detail-in">${detail}</div></div>`:''}
   </article>`;
 }
-function detailBlock({desc, kv, note, code, codeLabel, codeDark, actions}){
+function detailBlock({desc, kv, note, extra, code, codeLabel, codeDark, actions}){
   const kvHtml = kv && kv.length ? `<div><div class="dlabel">详情</div><dl class="kv">${kv.filter(Boolean).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>` : '';
   const noteHtml = note ? `<div class="mrow" style="color:var(--orange-900);align-items:flex-start">${iconSvg('bell')}<span class="v" style="white-space:normal">${esc(note)}</span></div>` : '';
   const codeHtml = code ? `<div><div class="dlabel">${esc(codeLabel||'命令')}</div><div class="codeblock${codeDark?' dark':''}">${esc(code)}</div></div>` : '';
   const actHtml = actions && actions.length ? `<div class="dactions">${actions.map(a=>`<button class="mini ${a.danger?'danger':''}" data-act="${a.act}" data-arg="${esc(a.arg||'')}">${iconSvg(a.icon)}${esc(a.label)}</button>`).join('')}</div>` : '';
-  return `${desc?`<p style="margin:0;font-size:12.5px;color:var(--body);line-height:1.55">${esc(desc)}</p>`:''}${kvHtml}${noteHtml}${codeHtml}${actHtml}`;
+  return `${desc?`<p style="margin:0;font-size:12.5px;color:var(--body);line-height:1.55">${esc(desc)}</p>`:''}${kvHtml}${noteHtml}${extra||''}${codeHtml}${actHtml}`;
+}
+
+/* ---------- keepalive session helpers ---------- */
+const KA_REASON = {success:'5h1m', retry:'重试', reset:'限额重置'};
+function fmtTokens(n){ return n==null ? '' : (n>=1000 ? (n/1000).toFixed(1).replace(/\.0$/,'')+'k' : String(n)); }
+function fmtShortTime(iso){
+  if(!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+}
+// Compact "usage" string for a service: latest probe tokens + window aggregate.
+function kaUsageText(svc){
+  const s = svc?.stats || {};
+  const last = svc?.tokens!=null ? fmtTokens(svc.tokens)+' tok' : null;
+  const agg = s.avgTokens!=null ? `均 ${fmtTokens(s.avgTokens)}` : null;
+  return [last, agg].filter(Boolean).join(' · ') || (svc?.elapsedSeconds!=null?`${svc.elapsedSeconds}s 探活`:'—');
+}
+// Timeline of recent keepalive sessions: time point · usage/elapsed · window outcome.
+function kaSessions(svc){
+  const ss = (svc?.sessions||[]).slice(0,8);
+  if(!ss.length) return '';
+  const rows = ss.map(s=>{
+    const st = STATUS[s.status]||STATUS.idle;
+    const bits = [
+      s.elapsedSeconds!=null ? `${s.elapsedSeconds}s` : '',
+      s.tokens!=null ? fmtTokens(s.tokens)+' tok' : '',
+      s.note || ''
+    ].filter(Boolean).join(' · ') || `exit=${s.exitCode}`;
+    return `<div class="katl-row" data-st="${s.status}">
+      <span class="dot ${st.cls}"></span>
+      <span class="katl-t">${esc(fmtShortTime(s.at))}</span>
+      <span class="katl-d">${esc(bits)}</span>
+      <span class="katl-r">${esc(KA_REASON[s.reason]||'')}</span>
+    </div>`;
+  }).join('');
+  return `<div><div class="dlabel">最近会话 · 时间点与用量</div><div class="katl">${rows}</div></div>`;
 }
 
 /* ----- infra (stable infrastructure) builders ----- */
 // Returns config objects usable both as compact pills and (in status view) as full cards.
 function infraItems(){
   const ka = keepalive.services || {};
-  const kaWorst = ['err','warn','ok'].find(s => ka.claude?.status===s || ka.codex?.status===s) || 'idle';
+  const kaWorst = ['err','warn','limit','ok'].find(s => ka.claude?.status===s || ka.codex?.status===s) || 'idle';
   const runnerUp = MODE==='live';
   const kaItem = (name, label, sub, svc, bg) => {
     const status = svc?.status || 'idle';
-    const badgeMap = {ok:'正常',warn:'间歇',err:'受阻',idle:'无数据'};
+    const stats = svc?.stats || {};
+    const act = (system?.engines||{})[name] || {};
+    const actText = act.activeProjects
+      ? `${act.activeProjects} 个项目${act.lastActiveAt?` · 最近 ${relTime(act.lastActiveAt)}`:''}`
+      : '暂无活跃项目';
+    const badgeMap = {ok:'正常',limit:'额度待重置',warn:'间歇',err:'受阻',idle:'无数据'};
+    const failStreak = stats.failStreak || 0;
+    const anomaly = failStreak>0
+      ? `连续 ${failStreak} 次未成功${svc?.note?`：${svc.note}`:''}`
+      : (stats.err>0||stats.warn>0) ? `近 ${stats.count} 次：${stats.err} 受阻 · ${stats.warn} 间歇` : '';
     return {
       id:'ka-'+name, status,
       glyph:{mono: name==='claude'?'CC':'cx', bg},
@@ -199,19 +307,30 @@ function infraItems(){
       badge: svc?.note ? (svc.note.length>10?badgeMap[status]:svc.note) : badgeMap[status],
       statText: svc?.nextEpoch ? '' : (svc?.exitCode!=null?`exit=${svc.exitCode}`:''),
       meta: metaRows([
-        ['最近', valText(svc?.note || (svc?.exitCode!=null?`exit=${svc.exitCode}`:'—'))],
-        svc?.variant?['模式', valText(svc.variant)]:null,
-        svc?.nextEpoch?['下次', cdSpan(svc.nextEpoch)]:['下次', valText('—')]
+        ['5h 窗口', svc?.nextEpoch ? cdSpan(svc.nextEpoch) : valText('—')],
+        ['用量', valText(kaUsageText(svc))],
+        ['会话', valText(`${stats.ok||0}/${stats.count||0} 正常${failStreak?` · 连失 ${failStreak}`:''}`)],
+        ['项目活跃', valText(actText)]
       ]),
       detail: detailBlock({
         desc: name==='claude'
           ? '普通终端 claude -p 可成功，但 launchd/背景执行可能返回 403。state 文件与 Codex 独立。'
           : 'launchd 下整体可成功；偶发 websocket 重连失败时 30 分钟后重试。',
         kv:[
-          ['上次结果', svc?.exitCode!=null?`exit=${svc.exitCode}`:'—'],
+          ['本次窗口起', fmtShortTime(svc?.lastSuccessAt)],
+          ['窗口重置', svc?.nextEpoch ? new Date(svc.nextEpoch*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '—'],
+          ['窗口长度', svc?.windowSeconds?`${svc.windowSeconds}s (5h1m)`:'18060s (5h1m)'],
+          ['上次结果', svc?.exitCode!=null?`exit=${svc.exitCode}`+(svc.elapsedSeconds!=null?` · ${svc.elapsedSeconds}s`:''):'—'],
+          ['最近用量', svc?.tokens!=null?`${svc.tokens.toLocaleString('en-US')} tokens`:'未上报'],
+          stats.avgTokens!=null?['平均用量', `${stats.avgTokens.toLocaleString('en-US')} tokens / 次`]:null,
+          ['会话统计', `${stats.count||0} 次 · ${stats.ok||0} 正常 · ${stats.warn||0} 间歇 · ${stats.err||0} 受阻`],
+          ['活跃项目', actText],
+          ['本地任务', `${act.taskCount||0} 个`],
           svc?.note?['说明', svc.note]:null,
-          ['退避', status==='ok'?'5h1m':'30 分钟重试']
+          ['退避', status==='ok'?'5h1m':status==='limit'?'待额度重置':'30 分钟重试']
         ],
+        note: anomaly || null,
+        extra: kaSessions(svc),
         code: name==='claude'?'claude setup-token':'launchctl print gui/$(id -u)/com.kolar.keepalive-cc-codex',
         codeLabel: name==='claude'?'修复建议':'查看状态',
         actions:[
@@ -244,16 +363,26 @@ function infraItems(){
       id:'tool-keepalive', status: kaWorst,
       glyph:{icon:'bell', bg:'linear-gradient(135deg,#da7b11,#bd5b00)'},
       title:'keepalive-cc-codex', sub:'LaunchAgent · 保活进程',
-      badge: kaWorst==='err'?'需关注':(kaWorst==='warn'?'间歇':'运行中'),
+      badge: kaWorst==='err'?'需关注':(kaWorst==='warn'?'间歇':kaWorst==='limit'?'额度待重置':'运行中'),
       statText:'用量窗口保活',
       meta: metaRows([
-        ['类型', valText('用量窗口保活')],
-        ['Claude', valText(ka.claude?.note || (ka.claude?.status==='ok'?'正常':'—'))],
-        ['Codex', valText(ka.codex?.note || (ka.codex?.status==='ok'?'正常':'—'))]
+        ['Claude 窗口', ka.claude?.nextEpoch ? cdSpan(ka.claude.nextEpoch) : valText('—')],
+        ['Codex 窗口', ka.codex?.nextEpoch ? cdSpan(ka.codex.nextEpoch) : valText('—')],
+        ['会话', valText(`CC ${ka.claude?.stats?.ok||0}/${ka.claude?.stats?.count||0} · cx ${ka.codex?.stats?.ok||0}/${ka.codex?.stats?.count||0} 正常`)]
       ]),
       detail: detailBlock({
         desc:'长驻 launchd 后台进程，独立检查 Claude 与 Codex，再睡到下一个到期服务。成功 ping 等 5h1m；瞬时失败 30 分钟后重试。',
-        kv:[['脚本','~/.local/bin/keepalive-cc-codex.sh'],['日志', keepalive.logFile||'~/.local/var/log/keepalive-cc-codex.log'],['成功间隔','18060s (5h1m)'],['重试','30 分钟']],
+        kv:[
+          ['脚本','~/.local/bin/keepalive-cc-codex.sh'],
+          ['日志', keepalive.logFile||'~/.local/var/log/keepalive-cc-codex.log'],
+          ['成功间隔','18060s (5h1m)'],['重试','30 分钟'],
+          ['Claude 重置', ka.claude?.nextEpoch ? new Date(ka.claude.nextEpoch*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '—'],
+          ['Codex 重置', ka.codex?.nextEpoch ? new Date(ka.codex.nextEpoch*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '—']
+        ],
+        note: [
+          (ka.claude?.stats?.failStreak>0)?`Claude 连续 ${ka.claude.stats.failStreak} 次未成功`:'',
+          (ka.codex?.stats?.failStreak>0)?`Codex 连续 ${ka.codex.stats.failStreak} 次未成功`:''
+        ].filter(Boolean).join('；') || null,
         code:'launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.kolar.keepalive-cc-codex.plist 2>/dev/null || true\nlaunchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kolar.keepalive-cc-codex.plist',
         codeLabel:'重载 LaunchAgent', codeDark:true,
         actions:[{act:'kalog',icon:'download',label:'查看保活日志'},{act:'copy',arg:'launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.kolar.keepalive-cc-codex.plist 2>/dev/null || true\nlaunchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.kolar.keepalive-cc-codex.plist',icon:'copy',label:'复制重载命令'}]
@@ -283,6 +412,7 @@ function taskCard(t){
   const ts = taskStatus(t);
   const bg = ts.status==='idle' ? 'linear-gradient(135deg,#9f9f9f,#818181)'
            : ts.status==='err' ? 'linear-gradient(135deg,#d7373f,#c9252d)'
+           : ts.status==='pending' ? 'linear-gradient(135deg,#6767ec,#4b4bd6)'
            : 'linear-gradient(135deg,#2680eb,#1473e6)';
   const sw = `<button class="switch" role="switch" aria-checked="${!!t.enabled}" title="启用/停用" data-switch></button>`;
   const last = t.lastRunAt ? new Date(t.lastRunAt).toLocaleString('zh-CN') : '从未运行';
@@ -298,9 +428,11 @@ function taskCard(t){
     ]),
     detail: detailBlock({
       kv:[
+        ['执行器', execLabel(t.executor)],
         ['命令模板', t.commandTemplate],
         ['运行路径', t.resolvedCwd||t.cwd],
         t.projectName?null:['备用路径', t.cwd],
+        (t.images&&t.images.length)?['图片附件', t.images.length+' 张']:null,
         ['登录检查', t.authCheckEnabled? (t.authCheckCommand||'claude auth status') : '关闭'],
         ['最长运行', (t.maxRuntimeMinutes||90)+' 分钟'],
         ['上次运行', last],
@@ -310,6 +442,7 @@ function taskCard(t){
       actions:[
         {act:'run',icon:'play',label:'立即运行'},
         {act:'edit',icon:'edit',label:'编辑'},
+        {act:'clone',icon:'add',label:'复制为新任务'},
         t.lastLog?{act:'log',arg:t.lastLog,icon:'download',label:'查看日志'}:null,
         {act:'del-task',icon:'trash',label:'删除',danger:true}
       ].filter(Boolean)
@@ -367,10 +500,11 @@ function projectCard(p){
     badge: p.pinned?'常用':'项目',
     meta: metaRows([
       ['路径', valText(homeTilde(p.path), true)],
+      (p.engines&&p.engines.length)?['引擎', engineChips(p.engines)]:null,
       pruns.length
         ? ['运行', `<span class="v"><span class="dot ${latestStatus.cls}" style="display:inline-block;margin-right:6px;vertical-align:-1px"></span>${pruns.length} 次 · 最近 ${esc(runTime(latest.startedAt))} ${esc(latestStatus.label)}</span>`]
         : (linked.length?['关联', valText(linked.join('、'))]:['备注', valText(p.notes||'—')])
-    ]),
+    ].filter(Boolean)),
     detail
   });
 }
@@ -445,7 +579,7 @@ function renderBoard(){
   } else {
     $('infra').hidden = true; $('infra').innerHTML=''; openInfraId=null;
     board.classList.remove('two');
-    const order=[['run','运行中','#2680eb','send'],['err','异常','#c9252d','bell'],['warn','需关注','#da7b11','bell'],['ok','正常','#12805c','folder'],['idle','已停用','#9f9f9f','settings']];
+    const order=[['run','运行中','#2680eb','send'],['pending','待运行','#6767ec','send'],['err','异常','#c9252d','bell'],['warn','需关注','#da7b11','bell'],['ok','正常','#12805c','folder'],['idle','已停用','#9f9f9f','settings']];
     const all = [...infraItems().map(cardShell), ...tasks.map(taskCard), ...projects.map(projectCard)];
     const cols = order
       .map(([sid,name,color,icon])=>({id:sid,name,color,icon,cards: all.filter(h=>cardStatusOf(h)===sid)}))
@@ -472,11 +606,49 @@ function renderStats(){
   mode.innerHTML = `<span class="dot ${MODE==='live'?'ok':'warn'}"></span>${MODE==='live'?'实时':'演示数据'}`;
 }
 
+function newestDataTime(){
+  const values = [];
+  for (const t of tasks) values.push(t.updatedAt, t.lastRunAt, t.nextRunAt);
+  for (const p of projects) values.push(p.updatedAt, p.createdAt);
+  for (const r of runs) values.push(r.startedAt, r.finishedAt);
+  for (const svc of Object.values(keepalive?.services || {})) {
+    values.push(svc.lastSuccessAt);
+    for (const s of svc.sessions || []) values.push(s.at);
+  }
+  return values
+    .map(v => v ? new Date(v) : null)
+    .filter(d => d && !Number.isNaN(d.getTime()))
+    .sort((a,b)=>b-a)[0] || null;
+}
+function renderNotice(){
+  const notice = $('notice');
+  if (!notice) return;
+  let msg = '';
+  if (MODE === 'demo') {
+    msg = `后端接口不可用，当前显示的是内置演示快照，不是最新数据。${loadError?.message ? `错误：${loadError.message}` : ''}`;
+  } else {
+    const newest = newestDataTime();
+    if (newest) {
+      const ageMs = Date.now() - newest.getTime();
+      if (ageMs > 24 * 60 * 60 * 1000) {
+        msg = `后端已连接，但业务数据最近更新时间是 ${newest.toLocaleString('zh-CN')}。点击“同步”可从 Claude 本地项目历史刷新项目列表。`;
+      }
+    }
+  }
+  if (!msg) {
+    notice.hidden = true;
+    notice.innerHTML = '';
+    return;
+  }
+  notice.hidden = false;
+  notice.innerHTML = `<div class="notice-in">${iconSvg('bell')}<span>${esc(msg)}</span></div>`;
+}
+
 function renderFilters(){
   const opts=[['all','全部','idle'],['run','运行中','run'],['err','异常','err'],['warn','需关注','warn'],['idle','已停用','idle']];
   $('filters').innerHTML = opts.map(([id,lab,dot])=>`<button class="chip" data-filter="${id}" aria-pressed="${filter===id}">${id!=='all'?`<span class="dot ${dot}"></span>`:''}${lab}</button>`).join('');
 }
-function renderAll(){ renderStats(); renderFilters(); renderBoard(); }
+function renderAll(){ renderStats(); renderFilters(); renderNotice(); renderBoard(); }
 
 /* ---------- Toast ---------- */
 function toast(msg, kind=''){
@@ -528,6 +700,7 @@ function handleAction(act, id, arg, btn){
     case 'copy': return copyText(arg);
     case 'run': return runTask(id);
     case 'edit': return openTaskDrawer(id);
+    case 'clone': return openTaskDrawer(id, undefined, true);
     case 'del-task': return deleteTask(id);
     case 'log': return openLog(arg, 'task');
     case 'kalog': return openLog(null, 'keepalive');
@@ -594,25 +767,44 @@ function scheduleEditor(type, s={}){
 }
 function renderScheduleFields(s){ $('f-schedule-fields').innerHTML = scheduleEditor($('f-scheduleType').value, s||{}); }
 
-function openTaskDrawer(id, presetProjectId){
-  const t = id ? tasks.find(x=>x.id===id) : null;
+let drawerImages = [];   // {name, file?, data?} — existing entries carry file, new ones carry data URL
+
+function openTaskDrawer(id, presetProjectId, clone=false){
+  const src = id ? tasks.find(x=>x.id===id) : null;
+  // clone = prefill from an existing task but save as a brand-new one (empty id).
+  const t = clone && src ? {...src, id:'', name:`${src.name||'任务'} 副本`} : src;
   const s = t?.schedule || {type:'manual'};
   const projId = presetProjectId ?? (t?.projectId||'');
   const presetPath = projId ? (projects.find(p=>p.id===projId)?.path||'') : (t?.cwd||'');
-  $('drawerTitle').textContent = t ? '编辑任务' : '新建任务';
+  const executor = t?.executor || 'claude';
+  drawerImages = (src?.images||[]).map(im=>({name:im.name, file:im.file, url:taskImageUrl(src.id, im.file)}));
+  $('drawerTitle').textContent = (t && !clone) ? '编辑任务' : '新建任务';
   $('drawerBody').innerHTML = `
     <input type="hidden" id="f-task-id" value="${t?.id||''}" />
     <div class="field"><label for="f-name">任务名称</label><input class="input" id="f-name" placeholder="夜间继续未完成" value="${esc(t?.name||'')}" /></div>
+    <div class="field"><label for="f-executor">执行器</label><select class="select" id="f-executor">
+      ${Object.entries(EXECUTORS).map(([v,c])=>`<option value="${v}" ${executor===v?'selected':''}>${esc(c.label)}</option>`).join('')}
+    </select><span class="hint">切换执行器会套用其默认命令模板与登录检查；选「自定义命令」保留当前模板</span></div>
     <div class="field"><label for="f-project">绑定项目</label><select class="select" id="f-project">${projectOptions(projId)}</select><span class="hint">绑定后运行时动态使用项目当前路径</span></div>
     <div class="field"><label for="f-cwd">仓库路径（未绑定项目时使用）</label><input class="input code" id="f-cwd" placeholder="/Users/kolar/github/project" value="${esc(presetPath)}" /></div>
-    <div class="field"><label for="f-prompt">任务 Prompt</label><textarea class="textarea" id="f-prompt" placeholder="继续未完成的计划…">${esc(t?.prompt||'')}</textarea></div>
-    <div class="field"><label for="f-cmd">命令模板</label><input class="input code" id="f-cmd" value='${esc(t?.commandTemplate||'claude --print "$TASK_PROMPT" --permission-mode acceptEdits')}' /></div>
-    <label class="checkrow"><input type="checkbox" id="f-authCheck" ${t?.authCheckEnabled!==false?'checked':''} />启动前检查 Claude 登录状态</label>
-    <div class="field-row">
-      <div class="field"><label for="f-authCmd">登录检查命令</label><input class="input code" id="f-authCmd" value="${esc(t?.authCheckCommand||'claude auth status')}" /></div>
-      <div class="field"><label for="f-authTimeout">登录步骤超时(秒)</label><input class="input" id="f-authTimeout" type="number" min="5" value="${t?.authTimeoutSeconds||300}" /></div>
+    <div class="field"><label for="f-prompt">任务 Prompt</label><textarea class="textarea prompt" id="f-prompt" placeholder="继续未完成的计划…">${esc(t?.prompt||'')}</textarea></div>
+    <div class="field"><label>图片附件</label>
+      <div class="dropzone" id="f-dropzone"><svg class="icon"><use href="#i-add"/></svg><span>点击或拖拽图片到此处 · 也可粘贴</span></div>
+      <input type="file" id="f-images-input" accept="image/*" multiple hidden />
+      <div class="thumbs" id="f-images-list"></div>
+      <span class="hint">运行时图片路径会附加到 Prompt，由执行器读取查看</span>
     </div>
-    <div class="field"><label for="f-authLogin">未登录时执行一次</label><input class="input code" id="f-authLogin" value="${esc(t?.authLoginCommand||'claude')}" /></div>
+    <details class="adv" id="f-advanced">
+      <summary>高级：命令模板与登录检查</summary>
+      <div class="field"><label for="f-cmd">命令模板</label><input class="input code" id="f-cmd" value='${esc(t?.commandTemplate||EXECUTORS.claude.command)}' /></div>
+      <div class="cmd-preview" id="f-cmd-preview"></div>
+      <label class="checkrow"><input type="checkbox" id="f-authCheck" ${t?.authCheckEnabled!==false?'checked':''} />启动前检查登录状态</label>
+      <div class="field-row">
+        <div class="field"><label for="f-authCmd">登录检查命令</label><input class="input code" id="f-authCmd" value="${esc(t?.authCheckCommand||'claude auth status')}" /></div>
+        <div class="field"><label for="f-authTimeout">登录步骤超时(秒)</label><input class="input" id="f-authTimeout" type="number" min="5" value="${t?.authTimeoutSeconds||300}" /></div>
+      </div>
+      <div class="field"><label for="f-authLogin">未登录时执行一次</label><input class="input code" id="f-authLogin" value="${esc(t?.authLoginCommand||'claude')}" /></div>
+    </details>
     <div class="field-row">
       <div class="field"><label for="f-scheduleType">触发方式</label><select class="select" id="f-scheduleType">
         ${[['manual','仅手动'],['once','一次性'],['daily','每天指定时间'],['weekly','每周指定时间'],['interval','间隔触发']].map(([v,l])=>`<option value="${v}" ${s.type===v?'selected':''}>${l}</option>`).join('')}
@@ -624,12 +816,85 @@ function openTaskDrawer(id, presetProjectId){
   `;
   $('drawerFoot').innerHTML = `<button class="btn" id="drawerCancel">取消</button><button class="btn primary" id="drawerSave"><svg class="icon"><use href="#i-add"/></svg>保存任务</button>`;
   renderScheduleFields(s);
+  renderDrawerImages();
+  updateCmdPreview();
+  // Surface the advanced block up-front when the stored command isn't a clean preset.
+  if (executor==='custom') $('f-advanced').open = true;
   $('f-scheduleType').addEventListener('change', ()=>renderScheduleFields({type:$('f-scheduleType').value}));
   $('f-project').addEventListener('change', ()=>{ const p=projects.find(x=>x.id===$('f-project').value); if(p) $('f-cwd').value=p.path; });
+  $('f-executor').addEventListener('change', applyExecutorPreset);
+  $('f-cmd').addEventListener('input', updateCmdPreview);
+  bindImageInputs();
   $('drawerCancel').addEventListener('click', closeDrawer);
   $('drawerSave').addEventListener('click', saveTask);
   openDrawer();
   setTimeout(()=>$('f-name').focus(), 260);
+}
+
+// Build a URL the local server can serve a stored task image from.
+function taskImageUrl(taskId, file){
+  if (!taskId || !file) return '';
+  return `/api/task-images/${encodeURIComponent(taskId)}/${encodeURIComponent(file.split('/').pop())}`;
+}
+
+// Switching executor fills command + auth fields with that preset's defaults ('custom' leaves them).
+function applyExecutorPreset(){
+  const c = EXECUTORS[$('f-executor').value];
+  if (!c || !c.command) return;
+  $('f-cmd').value = c.command;
+  $('f-authCheck').checked = !!c.authCheckEnabled;
+  $('f-authCmd').value = c.authCheck || '';
+  $('f-authLogin').value = c.authLogin || '';
+  updateCmdPreview();
+}
+
+// Live preview + sanity-check of the resolved command template.
+function updateCmdPreview(){
+  const box = $('f-cmd-preview'); if (!box) return;
+  const cmd = $('f-cmd').value;
+  const issues = [];
+  if (!/\$\{?TASK_PROMPT\}?/.test(cmd)) issues.push('未引用 $TASK_PROMPT，任务 Prompt 不会传入命令');
+  if ((cmd.match(/"/g)||[]).length % 2) issues.push('双引号未闭合');
+  if ((cmd.match(/'/g)||[]).length % 2) issues.push('单引号未闭合');
+  box.className = 'cmd-preview' + (issues.length ? ' bad' : '');
+  box.innerHTML = issues.length
+    ? issues.map(i=>`⚠ ${esc(i)}`).join('<br>')
+    : `✓ 运行时执行：<code>${esc(cmd)}</code>`;
+}
+
+function renderDrawerImages(){
+  const box = $('f-images-list'); if (!box) return;
+  box.innerHTML = drawerImages.map((im,i)=>{
+    const src = im.data || im.url || '';
+    return `<div class="thumb">
+      <img src="${esc(src)}" alt="${esc(im.name||'')}" />
+      <button class="rm" data-rm="${i}" title="移除">✕</button>
+      <span class="nm">${esc(im.name||'')}</span>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-rm]').forEach(b=>b.addEventListener('click', ()=>{
+    drawerImages.splice(Number(b.dataset.rm),1); renderDrawerImages();
+  }));
+}
+function addImageFiles(fileList){
+  for (const f of fileList){
+    if (!f.type || !f.type.startsWith('image/')) continue;
+    const reader = new FileReader();
+    reader.onload = ()=>{ drawerImages.push({name:f.name||'image', data:reader.result}); renderDrawerImages(); };
+    reader.readAsDataURL(f);
+  }
+}
+function bindImageInputs(){
+  const zone = $('f-dropzone'), input = $('f-images-input');
+  zone.addEventListener('click', ()=>input.click());
+  input.addEventListener('change', ()=>{ addImageFiles(input.files); input.value=''; });
+  zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', ()=>zone.classList.remove('drag'));
+  zone.addEventListener('drop', e=>{ e.preventDefault(); zone.classList.remove('drag'); addImageFiles(e.dataTransfer.files); });
+  $('f-prompt').addEventListener('paste', e=>{
+    const imgs = [...(e.clipboardData?.items||[])].filter(it=>it.type.startsWith('image/')).map(it=>it.getAsFile()).filter(Boolean);
+    if (imgs.length){ e.preventDefault(); addImageFiles(imgs); }
+  });
 }
 
 function readSchedule(){
@@ -645,8 +910,10 @@ async function saveTask(){
   const id = $('f-task-id').value;
   const name = $('f-name').value.trim();
   if (!name){ toast('请填写任务名称','err'); $('f-name').focus(); return; }
+  const images = drawerImages.map(im=> im.file ? {name:im.name, file:im.file} : {name:im.name, data:im.data});
   const payload = {
-    name, projectId:$('f-project').value, cwd:$('f-cwd').value.trim(), prompt:$('f-prompt').value.trim(),
+    name, executor:$('f-executor').value, projectId:$('f-project').value, cwd:$('f-cwd').value.trim(),
+    prompt:$('f-prompt').value.trim(), images,
     commandTemplate:$('f-cmd').value.trim(), authCheckEnabled:$('f-authCheck').checked,
     authCheckCommand:$('f-authCmd').value.trim(), authLoginCommand:$('f-authLogin').value.trim(),
     authTimeoutSeconds:Number($('f-authTimeout').value||300), enabled:$('f-enabled').checked,
@@ -654,8 +921,9 @@ async function saveTask(){
   };
   if (MODE==='demo'){
     const proj = projects.find(p=>p.id===payload.projectId);
-    if (id){ const i=tasks.findIndex(t=>t.id===id); tasks[i]={...tasks[i],...payload, projectName:proj?.name||'', resolvedCwd:proj?.path||payload.cwd}; }
-    else tasks.push({id:'demo-'+Date.now(), ...payload, projectName:proj?.name||'', resolvedCwd:proj?.path||payload.cwd, running:false, lastStatus:'never', lastRunAt:null, nextRunAt:null});
+    const demoImages = drawerImages.map(im=>({name:im.name, file:im.file||('（演示）'+im.name)}));
+    if (id){ const i=tasks.findIndex(t=>t.id===id); tasks[i]={...tasks[i],...payload, images:demoImages, projectName:proj?.name||'', resolvedCwd:proj?.path||payload.cwd}; }
+    else tasks.push({id:'demo-'+Date.now(), ...payload, images:demoImages, projectName:proj?.name||'', resolvedCwd:proj?.path||payload.cwd, running:false, lastStatus:'never', lastRunAt:null, nextRunAt:null});
     closeDrawer(); renderAll(); toast(id?'已保存（演示）':'已创建（演示）'); return;
   }
   await fetch(id?`/api/tasks/${id}`:'/api/tasks', {method:id?'PUT':'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload)});
@@ -745,7 +1013,27 @@ function bindToolbar(){
     filter = c.dataset.filter; renderFilters(); renderBoard();
   });
   $('addTaskBtn').addEventListener('click', ()=>openTaskDrawer());
-  $('syncBtn').addEventListener('click', e=>{ const b=e.currentTarget; b.disabled=true; load().then(()=>{ b.disabled=false; toast(MODE==='live'?'已同步':'离线 · 演示数据'); }); });
+  $('syncBtn').addEventListener('click', async e=>{
+    const b=e.currentTarget; b.disabled=true;
+    try{
+      if (MODE==='live') {
+        const result = await fetch('/api/projects/sync', {method:'POST'}).then(r=>{
+          if(!r.ok) throw new Error('sync '+r.status);
+          return r.json();
+        });
+        await load();
+        toast(`已同步 · 新增 ${result.added||0} · 更新 ${result.updated||0} · 清理 ${result.removed||0}`);
+      } else {
+        await load();
+        toast('离线 · 演示数据');
+      }
+    }catch(err){
+      toast(`同步失败：${err.message}`, 'err');
+      await load();
+    }finally{
+      b.disabled=false;
+    }
+  });
   $('scrim').addEventListener('click', closeDrawer);
   $('drawerClose').addEventListener('click', closeDrawer);
   $('logClose').addEventListener('click', closeLog);
