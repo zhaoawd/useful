@@ -677,11 +677,19 @@ function bindActionButtons(scope=document){
     });
   });
 }
+const openCards = new Set();   // card ids kept expanded across auto-refresh re-renders
+
 function bindCards(){
   document.querySelectorAll('[data-toggle]').forEach(el=>el.addEventListener('click', e=>{
     if (e.target.closest('[data-switch]') || e.target.closest('[data-act]')) return;
-    el.closest('.card').classList.toggle('open');
+    const card = el.closest('.card');
+    const open = card.classList.toggle('open');
+    if (open) openCards.add(card.dataset.id); else openCards.delete(card.dataset.id);
   }));
+  // re-apply persisted open state after each render so refreshes don't collapse cards
+  document.querySelectorAll('.card[data-id]').forEach(card=>{
+    if (openCards.has(card.dataset.id)) card.classList.add('open');
+  });
   document.querySelectorAll('[data-switch]').forEach(sw=>sw.addEventListener('click', async e=>{
     e.stopPropagation();
     const id = sw.closest('.card').dataset.id;
