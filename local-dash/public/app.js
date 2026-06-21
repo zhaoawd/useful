@@ -48,7 +48,7 @@ const STATUS = {
 
 /* ---------- Task executors (engine presets) ---------- */
 const EXECUTORS = {
-  claude:{ label:'Claude Code', command:'claude --print "$TASK_PROMPT" --permission-mode acceptEdits',
+  claude:{ label:'Claude Code', command:'claude --print "$TASK_PROMPT" --permission-mode auto',
     authCheckEnabled:true, authCheck:'claude auth status', authLogin:'claude' },
   codex:{ label:'Codex', command:'codex exec --full-auto "$TASK_PROMPT"',
     authCheckEnabled:true, authCheck:'codex login status', authLogin:'codex login' },
@@ -190,6 +190,43 @@ function taskStatus(t){
               auth_failed:{status:'warn',label:'登录失败'}, never:{status:'pending',label:'待运行'} };
   return m[t.lastStatus] || {status:'pending',label:'待运行'};
 }
+/* ---------- Task lifecycle phases ---------- */
+// Lifecycle axis (orthogonal to last-result status): where a task sits in its
+// run cycle. Active phases float to the top of the list; archive phases drop
+// into a collapsible group so finished/expired tasks stop crowding live ones.
+const PHASE = {
+  run:      {rank:0, group:'active',  dot:'run',     label:'运行中'},
+  upcoming: {rank:1, group:'active',  dot:'pending', label:'待运行'},
+  done:     {rank:2, group:'archive', dot:'ok',      label:'已完成'},
+  expired:  {rank:3, group:'archive', dot:'warn',    label:'已过期'},
+  disabled: {rank:4, group:'archive', dot:'idle',    label:'已停用'},
+};
+function taskPhase(t){
+  if (t.running) return 'run';
+  if (!t.enabled) return 'disabled';
+  const nextMs = t.nextRunAt ? new Date(t.nextRunAt).getTime() : 0;
+  if (nextMs > Date.now()) return 'upcoming';          // recurring or once not yet fired
+  if (!t.schedule || t.schedule.type==='manual') return 'upcoming'; // manual tasks stay ready
+  if (t.lastRunAt) return 'done';                      // fired, nothing scheduled next
+  return 'expired';                                    // scheduled time passed, never ran
+}
+function taskSortTie(t, phase){
+  // ascending sort within a phase
+  if (phase==='upcoming') return t.nextRunAt ? new Date(t.nextRunAt).getTime() : Infinity; // soonest first
+  if (phase==='done')    return -(t.lastRunAt ? new Date(t.lastRunAt).getTime() : 0);       // most recent first
+  if (phase==='expired') return -(t.schedule?.runAt ? new Date(t.schedule.runAt).getTime() : 0);
+  return 0;
+}
+function sortedTasks(){
+  return [...tasks].sort((a,b)=>{
+    const pa=taskPhase(a), pb=taskPhase(b);
+    if (PHASE[pa].rank!==PHASE[pb].rank) return PHASE[pa].rank-PHASE[pb].rank;
+    const ta=taskSortTie(a,pa), tb=taskSortTie(b,pb);
+    if (ta!==tb) return ta-tb;
+    return String(a.name||'').localeCompare(String(b.name||''),'zh');
+  });
+}
+
 function scheduleText(s){
   if (!s || s.type==='manual') return '仅手动';
   if (s.type==='once') return '一次性 · '+(s.runAt? new Date(s.runAt).toLocaleString('zh-CN'):'未设定');
@@ -355,7 +392,7 @@ function infraItems(){
       detail: detailBlock({
         desc:'人离开电脑时按配置触发 Claude Code 或其他编程命令。常驻为当前用户的 macOS LaunchAgent，睡眠期间不跑，唤醒后补跑到期日程。',
         kv:[['端口', system?.port||4321],['常驻','com.kolar LaunchAgent'],['配置','data/projects.json · tasks.json'],['日志','logs/'],['触发','手动 / 一次性 / 每日 / 每周 / 间隔']],
-        code:'claude --print "$TASK_PROMPT" --permission-mode acceptEdits', codeLabel:'默认命令模板',
+        code:'claude --print "$TASK_PROMPT" --permission-mode auto', codeLabel:'默认命令模板',
         actions:[{act:'copy',arg:'npm start',icon:'copy',label:'复制启动命令'},{act:'copy',arg:'npm run install-daemon',icon:'copy',label:'复制常驻命令'}]
       })
     },
@@ -473,6 +510,18 @@ function runRow(r){
   </div>`;
 }
 
+// Compact "who/when/how much" line for the latest editor session on a project:
+// engine chip · relative recency · session count.
+function sessionLine(p){
+  const eng = ENGINE_META[p.lastEngine] || (p.engines&&p.engines[0]&&ENGINE_META[p.engines[0].engine]) || null;
+  const parts = [];
+  if (eng) parts.push(`<span class="echip ${eng.cls}">${esc(eng.mono)}</span>`);
+  if (p.lastActiveAt) parts.push(`<span class="sess-m">${esc(relTime(p.lastActiveAt))}</span>`);
+  if (p.sessionCount) parts.push(`<span class="sess-m">${p.sessionCount} 次会话</span>`);
+  if (!parts.length) return null;
+  return `<span class="v sess-line">${parts.join('<span class="sess-dot">·</span>')}</span>`;
+}
+
 function projectCard(p){
   const linked = tasks.filter(t=>t.projectId===p.id).map(t=>t.name);
   const pruns = runsForProject(p);
@@ -489,21 +538,32 @@ function projectCard(p){
     {act:'pin-project',icon:'pin',label:p.pinned?'取消常用':'固定常用'},
     {act:'del-project',icon:'trash',label:'删除',danger:true}
   ];
+  // Lead with what the project was about (session title) instead of its path.
+  const sub = p.sessionLabel || homeTilde(p.path);
+  const sess = sessionLine(p);
+  const runVal = pruns.length
+    ? `<span class="v"><span class="dot ${latestStatus.cls}" style="display:inline-block;margin-right:6px;vertical-align:-1px"></span>${pruns.length} 次 · 最近 ${esc(runTime(latest.startedAt))} ${esc(latestStatus.label)}</span>`
+    : null;
   const detail = `
+    ${p.lastSessionPrompt?`<div><div class="dlabel">最近会话 Prompt</div><p style="margin:0;font-size:12.5px;color:var(--body);line-height:1.55">${esc(p.lastSessionPrompt)}</p></div>`:''}
+    <div><div class="dlabel">详情</div><dl class="kv">
+      <dt>路径</dt><dd>${esc(homeTilde(p.path))}</dd>
+      ${p.lastSessionBranch?`<dt>分支</dt><dd>${esc(p.lastSessionBranch)}</dd>`:''}
+      ${p.sessionCount?`<dt>会话数</dt><dd>${p.sessionCount}</dd>`:''}
+      ${(p.engines&&p.engines.length)?`<dt>引擎</dt><dd>${p.engines.map(e=>`${esc((ENGINE_META[e.engine]||{}).label||e.engine)} ${esc(relTime(e.at))}`).join('，')}</dd>`:''}
+    </dl></div>
     ${linked.length?`<div><div class="dlabel">关联任务</div><p style="margin:0;font-size:12.5px;color:var(--body)">${esc(linked.join('、'))}</p></div>`:''}
     <div><div class="dlabel">运行历史 · 时间倒序 (${pruns.length})</div>${runsHtml}</div>
     <div class="dactions">${actions.map(a=>`<button class="mini ${a.danger?'danger':''}" data-act="${a.act}" data-arg="${esc(a.arg||'')}">${iconSvg(a.icon)}${esc(a.label)}</button>`).join('')}</div>`;
   return cardShell({
     id:p.id, status:'ok',
     glyph:{icon: p.path==='/Users/kolar'?'home':'folder', bg},
-    title:p.name, sub: homeTilde(p.path),
+    title:p.name, sub,
     badge: p.pinned?'常用':'项目',
     meta: metaRows([
-      ['路径', valText(homeTilde(p.path), true)],
-      (p.engines&&p.engines.length)?['引擎', engineChips(p.engines)]:null,
-      pruns.length
-        ? ['运行', `<span class="v"><span class="dot ${latestStatus.cls}" style="display:inline-block;margin-right:6px;vertical-align:-1px"></span>${pruns.length} 次 · 最近 ${esc(runTime(latest.startedAt))} ${esc(latestStatus.label)}</span>`]
-        : (linked.length?['关联', valText(linked.join('、'))]:['备注', valText(p.notes||'—')])
+      sess ? ['活跃', sess] : null,
+      runVal ? ['运行', runVal] : (linked.length?['关联', valText(linked.join('、'))]:null),
+      p.lastSessionBranch ? ['分支', valText(p.lastSessionBranch, true)] : null
     ].filter(Boolean)),
     detail
   });
@@ -515,12 +575,84 @@ ICONS.settings = ICONS.refresh;
 
 function cardStatusOf(html){ const m = html.match(/data-status="([^"]+)"/); return m?m[1]:'idle'; }
 
+// Apply the active status filter as a visual dim on a rendered card string.
+function applyDim(h){
+  if (filter==='all' || cardStatusOf(h)===filter) return h;
+  return h.replace('class="card', 'class="card dim');
+}
+
+// Render a phase-ordered list of tasks with a small lifecycle divider before
+// each new phase, so the run cycle reads top-to-bottom inside the group.
+function taskGroupHtml(list){
+  let html='', lastPhase=null;
+  for (const t of list){
+    const ph = taskPhase(t);
+    if (ph!==lastPhase){
+      const p = PHASE[ph];
+      const n = list.filter(x=>taskPhase(x)===ph).length;
+      html += `<div class="phase-label"><span class="dot ${p.dot}"></span>${p.label}<span class="phase-n">${n}</span></div>`;
+      lastPhase = ph;
+    }
+    html += applyDim(taskCard(t));
+  }
+  return html;
+}
+
+// The 定时任务 column: active/upcoming tasks up top, finished/expired/disabled
+// folded into a collapsible archive group whose open state survives re-renders.
+function tasksColumn(){
+  const sorted  = sortedTasks();
+  const active  = sorted.filter(t=>PHASE[taskPhase(t)].group==='active');
+  const archive = sorted.filter(t=>PHASE[taskPhase(t)].group==='archive');
+  const activeHtml = active.length
+    ? taskGroupHtml(active)
+    : `<div class="empty">暂无进行中或待运行的任务</div>`;
+  const archiveHtml = archive.length
+    ? `<details class="lifecycle-group" data-archive${archiveOpen?' open':''}>
+        <summary>已完成 · 已过期 · 停用<span class="lg-count">${archive.length}</span></summary>
+        <div class="lg-body">${taskGroupHtml(archive)}</div>
+      </details>`
+    : '';
+  return `<section class="col tasks">
+    <div class="col-head">
+      <div class="ci" style="background:#1473e6">${iconSvg('send')}</div>
+      <h2>定时任务</h2>
+      <span class="count">${tasks.length}</span>
+      <button class="col-add" data-add="tasks">${iconSvg('add')}新建</button>
+    </div>
+    <div class="col-body">${activeHtml}${archiveHtml}</div>
+  </section>`;
+}
+
+// The 本地项目 column: pinned ("常用") projects shown as cards, the long tail
+// folded into a collapsible group so the panel stays focused on what you use.
+function projectsColumn(){
+  const pinned = projects.filter(p=>p.pinned);
+  const rest   = projects.filter(p=>!p.pinned);
+  const grid = (list)=>list.map(p=>applyDim(projectCard(p))).join('');
+  const pinnedHtml = pinned.length
+    ? `<div class="proj-grid">${grid(pinned)}</div>`
+    : `<div class="empty">还没有常用项目 · 在任意项目卡片里点「固定常用」</div>`;
+  const restHtml = rest.length
+    ? `<details class="lifecycle-group" data-archive-proj${projectsOpen?' open':''}>
+        <summary>其他项目<span class="lg-count">${rest.length}</span></summary>
+        <div class="lg-body proj-grid">${grid(rest)}</div>
+      </details>`
+    : '';
+  return `<section class="col projects">
+    <div class="col-head">
+      <div class="ci" style="background:#12805c">${iconSvg('folder')}</div>
+      <h2>本地项目</h2>
+      <span class="count">${projects.length}</span>
+      <button class="col-add" data-add="projects">${iconSvg('add')}新建</button>
+    </div>
+    <div class="col-body">${pinnedHtml}${restHtml}</div>
+  </section>`;
+}
+
 // One column section, with status-based dimming applied.
 function colSection(col){
-  const cards = col.cards.map(h=>{
-    const dim = (filter!=='all' && cardStatusOf(h)!==filter) ? ' dim':'';
-    return dim ? h.replace('class="card', 'class="card'+dim) : h;
-  }).join('');
+  const cards = col.cards.map(applyDim).join('');
   const add = col.add ? `<button class="add-card" data-add="${col.add}">${iconSvg('add')}${col.addLabel}</button>` : '';
   return `<section class="col${col.cls?' '+col.cls:''}">
     <div class="col-head">
@@ -571,16 +703,12 @@ function renderBoard(){
     $('infra').hidden = false;
     renderInfra();
     board.classList.add('two');
-    const cols = [
-      {id:'tasks', cls:'tasks', name:'定时任务', icon:'send', color:'#1473e6', cards: tasks.map(taskCard), add:'tasks', addLabel:'新建任务'},
-      {id:'projects', cls:'projects', name:'本地项目', icon:'folder', color:'#12805c', cards: projects.map(projectCard), add:'projects', addLabel:'新建项目'}
-    ];
-    board.innerHTML = cols.map(colSection).join('');
+    board.innerHTML = tasksColumn() + projectsColumn();
   } else {
     $('infra').hidden = true; $('infra').innerHTML=''; openInfraId=null;
     board.classList.remove('two');
     const order=[['run','运行中','#2680eb','send'],['pending','待运行','#6767ec','send'],['err','异常','#c9252d','bell'],['warn','需关注','#da7b11','bell'],['ok','正常','#12805c','folder'],['idle','已停用','#9f9f9f','settings']];
-    const all = [...infraItems().map(cardShell), ...tasks.map(taskCard), ...projects.map(projectCard)];
+    const all = [...infraItems().map(cardShell), ...sortedTasks().map(taskCard), ...projects.map(projectCard)];
     const cols = order
       .map(([sid,name,color,icon])=>({id:sid,name,color,icon,cards: all.filter(h=>cardStatusOf(h)===sid)}))
       .filter(c=>c.cards.length);
@@ -672,17 +800,28 @@ function bindActionButtons(scope=document){
     b._actBound = true;
     b.addEventListener('click', e=>{
       e.stopPropagation();
-      const card = b.closest('.card'); const id = card?.dataset.id;
+      // id comes from the nearest [data-id] host — a card on the board, or the
+      // popup body when actions are triggered from the detail popup.
+      const host = b.closest('[data-id]'); const id = host?.dataset.id;
       handleAction(b.dataset.act, id, b.dataset.arg, b);
     });
   });
 }
 const openCards = new Set();   // card ids kept expanded across auto-refresh re-renders
+let archiveOpen = false;       // task archive group open state, persisted across re-renders
+let projectsOpen = false;      // "其他项目" group open state, persisted across re-renders
 
 function bindCards(){
+  const arch = document.querySelector('details[data-archive]');
+  if (arch) arch.addEventListener('toggle', ()=>{ archiveOpen = arch.open; });
+  const archProj = document.querySelector('details[data-archive-proj]');
+  if (archProj) archProj.addEventListener('toggle', ()=>{ projectsOpen = archProj.open; });
   document.querySelectorAll('[data-toggle]').forEach(el=>el.addEventListener('click', e=>{
     if (e.target.closest('[data-switch]') || e.target.closest('[data-act]')) return;
     const card = el.closest('.card');
+    // archived (已完成 等) cards live in a compact grid where inline accordion is
+    // awkward — show their detail in a popup instead.
+    if (card.closest('[data-archive]')) { openCardPopup(card); return; }
     const open = card.classList.toggle('open');
     if (open) openCards.add(card.dataset.id); else openCards.delete(card.dataset.id);
   }));
@@ -969,22 +1108,49 @@ async function saveProject(){
 }
 
 /* ---------- Log modal ---------- */
+// Logs are written with UTC timestamps (e.g. [2026-06-01T16:42:11Z]); show them in UTC+8.
+function logToUtc8(text){
+  if (!text) return text;
+  return text.replace(/(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.\d+)?Z/g, (m)=>{
+    const d = new Date(m); if (isNaN(d)) return m;
+    const s = new Date(d.getTime() + 8*3600*1000), p = n=>String(n).padStart(2,'0');
+    return `${s.getUTCFullYear()}-${p(s.getUTCMonth()+1)}-${p(s.getUTCDate())} ${p(s.getUTCHours())}:${p(s.getUTCMinutes())}:${p(s.getUTCSeconds())} +08:00`;
+  });
+}
 async function openLog(file, kind){
   $('logModal').classList.add('show');
   $('logBody').textContent = '加载中…';
   if (kind==='keepalive'){
     $('logTitle').textContent = 'keepalive-cc-codex.log';
-    if (MODE==='demo'){ $('logBody').textContent = DEMO_KA_LOG; return; }
-    try{ $('logBody').textContent = await fetch('/api/keepalive/log').then(r=>r.text()); }
+    if (MODE==='demo'){ $('logBody').textContent = logToUtc8(DEMO_KA_LOG); return; }
+    try{ $('logBody').textContent = logToUtc8(await fetch('/api/keepalive/log').then(r=>r.text())); }
     catch{ $('logBody').textContent = '无法读取保活日志。'; }
     return;
   }
   $('logTitle').textContent = file || '日志';
-  if (MODE==='demo'){ $('logBody').textContent = DEMO_TASK_LOG; return; }
-  try{ $('logBody').textContent = await fetch('/api/logs/'+encodeURIComponent(file)).then(r=>r.text()); }
+  if (MODE==='demo'){ $('logBody').textContent = logToUtc8(DEMO_TASK_LOG); return; }
+  try{ $('logBody').textContent = logToUtc8(await fetch('/api/logs/'+encodeURIComponent(file)).then(r=>r.text())); }
   catch{ $('logBody').textContent = '无法读取日志文件。'; }
 }
 function closeLog(){ $('logModal').classList.remove('show'); }
+
+// Pop an archived card's meta + detail into a modal. Content is lifted straight
+// from the rendered card so there's no second source of truth to keep in sync.
+function openCardPopup(card){
+  const id = card.dataset.id;
+  $('popTitle').textContent = card.querySelector('.titlewrap .t')?.textContent || '详情';
+  $('popBadge').innerHTML = card.querySelector('.row1 > .badge')?.outerHTML || '';
+  const meta = card.querySelector('.meta')?.outerHTML || '';
+  const detail = card.querySelector('.detail-in')?.innerHTML || '';
+  const body = $('popBody');
+  body.dataset.id = id;
+  body.innerHTML = meta + detail;
+  $('popModal').classList.add('show');
+  bindActionButtons(body);
+  // any action re-renders the board, so close the popup to avoid showing stale data
+  body.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click', ()=>setTimeout(closePopup, 0)));
+}
+function closePopup(){ $('popModal').classList.remove('show'); }
 
 const DEMO_TASK_LOG = `[2026-06-01T16:42:11Z] task=继续未完成
 [2026-06-01T16:42:11Z] cwd=/Users/kolar/github/autophone
@@ -1046,7 +1212,9 @@ function bindToolbar(){
   $('drawerClose').addEventListener('click', closeDrawer);
   $('logClose').addEventListener('click', closeLog);
   $('logModal').addEventListener('click', e=>{ if(e.target===$('logModal')) closeLog(); });
-  document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeDrawer(); closeLog(); } });
+  $('popClose').addEventListener('click', closePopup);
+  $('popModal').addEventListener('click', e=>{ if(e.target===$('popModal')) closePopup(); });
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closeDrawer(); closeLog(); closePopup(); } });
 }
 
 /* ---------- Clock + countdown tick ---------- */

@@ -90,6 +90,12 @@ function normalizeProject(input, existing = {}) {
     sortOrder: Number(input.sortOrder ?? existing.sortOrder ?? Date.now()),
     lastClaudeAt: input.lastClaudeAt ?? existing.lastClaudeAt ?? null,
     lastCodexAt: input.lastCodexAt ?? existing.lastCodexAt ?? null,
+    // Pulled from the editor session transcripts so cards can lead with what the
+    // project was actually about, not just its path. Refreshed on sync.
+    lastSessionTitle: input.lastSessionTitle ?? existing.lastSessionTitle ?? null,
+    lastSessionPrompt: input.lastSessionPrompt ?? existing.lastSessionPrompt ?? null,
+    lastSessionBranch: input.lastSessionBranch ?? existing.lastSessionBranch ?? null,
+    sessionCount: Number(input.sessionCount ?? existing.sessionCount ?? 0),
     createdAt: existing.createdAt || nowIso(),
     updatedAt: nowIso()
   };
@@ -106,6 +112,15 @@ function projectView(project) {
     .sort((a, b) => String(b.at).localeCompare(String(a.at)));
   view.lastActiveAt =
     [view.lastClaudeAt, view.lastCodexAt].filter(Boolean).sort().pop() || null;
+  // Which engine touched it most recently — drives the "最近会话" line on the card.
+  view.lastEngine =
+    view.lastClaudeAt && view.lastCodexAt
+      ? (String(view.lastClaudeAt) >= String(view.lastCodexAt) ? "claude" : "codex")
+      : view.lastClaudeAt ? "claude" : view.lastCodexAt ? "codex" : null;
+  // Best one-line description of the latest session: AI title, else a trimmed prompt.
+  const prompt = (view.lastSessionPrompt || "").replace(/\s+/g, " ").trim();
+  view.sessionLabel =
+    view.lastSessionTitle || (prompt ? (prompt.length > 64 ? prompt.slice(0, 64) + "…" : prompt) : null);
   return view;
 }
 
@@ -150,26 +165,39 @@ async function discoverClaudeProjects() {
       const raw = await readFile(filePath, "utf8").catch(() => "");
       if (!raw) continue;
 
+      // One pass over the transcript: cwd anchors the session to a project, while
+      // aiTitle / lastPrompt / gitBranch describe what the session was about.
+      let cwd = "", latestAt = null, title = null, prompt = null, branch = null;
       for (const line of raw.split(/\r?\n/)) {
-        if (!line.includes('"cwd"')) continue;
-        let item;
-        try {
-          item = JSON.parse(line);
-        } catch {
-          continue;
+        if (!line) continue;
+        if (!cwd && line.includes('"cwd"')) {
+          try {
+            const o = JSON.parse(line);
+            if (typeof o.cwd === "string") { cwd = o.cwd; latestAt = o.timestamp || latestAt; }
+          } catch {}
         }
-        const cwd = typeof item.cwd === "string" ? item.cwd : "";
-        if (!cwd.startsWith("/") || cwd.includes("/.trash/")) continue;
-        const exists = await stat(cwd).catch(() => null);
-        if (!exists?.isDirectory()) continue;
-        const projectPath = await gitRoot(cwd);
-        if (!projectPath) continue;
-        const latestAt = item.timestamp || info?.mtime?.toISOString() || nowIso();
-        const previous = found.get(projectPath);
-        if (!previous || String(latestAt) > String(previous.latestAt)) {
-          found.set(projectPath, { path: projectPath, latestAt });
+        if (line.includes('"aiTitle"')) {
+          try { const o = JSON.parse(line); if (o.aiTitle) title = o.aiTitle; } catch {}
+        }
+        if (!prompt && line.includes('"lastPrompt"')) {
+          try { const o = JSON.parse(line); if (o.lastPrompt) prompt = o.lastPrompt; } catch {}
+        }
+        if (!branch && line.includes('"gitBranch"')) {
+          try { const o = JSON.parse(line); if (o.gitBranch) branch = o.gitBranch; } catch {}
         }
       }
+      if (!cwd.startsWith("/") || cwd.includes("/.trash/")) continue;
+      const exists = await stat(cwd).catch(() => null);
+      if (!exists?.isDirectory()) continue;
+      const projectPath = await gitRoot(cwd);
+      if (!projectPath) continue;
+      latestAt = latestAt || info?.mtime?.toISOString() || nowIso();
+      const entry = found.get(projectPath) || { path: projectPath, latestAt, title, prompt, branch, count: 0 };
+      entry.count += 1;
+      if (String(latestAt) >= String(entry.latestAt)) {
+        entry.latestAt = latestAt; entry.title = title; entry.prompt = prompt; entry.branch = branch;
+      }
+      found.set(projectPath, entry);
     }
   }
 
@@ -209,10 +237,10 @@ async function discoverCodexProjects() {
       const info = await stat(filePath).catch(() => null);
       const latestAt =
         head.match(/"timestamp":"([^"]*)"/)?.[1] || info?.mtime?.toISOString() || nowIso();
-      const previous = found.get(projectPath);
-      if (!previous || String(latestAt) > String(previous.latestAt)) {
-        found.set(projectPath, { path: projectPath, latestAt });
-      }
+      const entry = found.get(projectPath) || { path: projectPath, latestAt, count: 0 };
+      entry.count += 1;
+      if (String(latestAt) > String(entry.latestAt)) entry.latestAt = latestAt;
+      found.set(projectPath, entry);
     } finally {
       await fh.close();
     }
@@ -226,15 +254,27 @@ async function discoverCodexProjects() {
 async function discoverAllProjects() {
   const [claude, codex] = await Promise.all([discoverClaudeProjects(), discoverCodexProjects()]);
   const merged = new Map();
-  const absorb = (list, key) => {
-    for (const item of list) {
-      const cur = merged.get(item.path) || { path: item.path, lastClaudeAt: null, lastCodexAt: null };
-      if (!cur[key] || String(item.latestAt) > String(cur[key])) cur[key] = item.latestAt;
-      merged.set(item.path, cur);
-    }
-  };
-  absorb(claude, "lastClaudeAt");
-  absorb(codex, "lastCodexAt");
+  const get = (p) =>
+    merged.get(p) || {
+      path: p, lastClaudeAt: null, lastCodexAt: null,
+      title: null, prompt: null, branch: null, sessionCount: 0
+    };
+  // Claude transcripts carry the session title/prompt/branch; Codex only contributes recency + count.
+  for (const item of claude) {
+    const cur = get(item.path);
+    if (!cur.lastClaudeAt || String(item.latestAt) > String(cur.lastClaudeAt)) cur.lastClaudeAt = item.latestAt;
+    cur.title = item.title;
+    cur.prompt = item.prompt;
+    cur.branch = item.branch;
+    cur.sessionCount += item.count || 0;
+    merged.set(item.path, cur);
+  }
+  for (const item of codex) {
+    const cur = get(item.path);
+    if (!cur.lastCodexAt || String(item.latestAt) > String(cur.lastCodexAt)) cur.lastCodexAt = item.latestAt;
+    cur.sessionCount += item.count || 0;
+    merged.set(item.path, cur);
+  }
 
   for (const entry of merged.values()) {
     entry.latestAt =
@@ -265,7 +305,11 @@ async function syncClaudeProjects() {
           notes: existing.notes || SYNC_NOTE,
           sortOrder: existing.sortOrder || Date.now(),
           lastClaudeAt: item.lastClaudeAt,
-          lastCodexAt: item.lastCodexAt
+          lastCodexAt: item.lastCodexAt,
+          lastSessionTitle: item.title,
+          lastSessionPrompt: item.prompt,
+          lastSessionBranch: item.branch,
+          sessionCount: item.sessionCount
         },
         existing
       );
@@ -283,7 +327,11 @@ async function syncClaudeProjects() {
         pinned: false,
         sortOrder: Date.now() + added,
         lastClaudeAt: item.lastClaudeAt,
-        lastCodexAt: item.lastCodexAt
+        lastCodexAt: item.lastCodexAt,
+        lastSessionTitle: item.title,
+        lastSessionPrompt: item.prompt,
+        lastSessionBranch: item.branch,
+        sessionCount: item.sessionCount
       })
     );
     added += 1;
@@ -349,7 +397,7 @@ function normalizeTask(input, existing = {}) {
   const commandTemplate = String(
     input.commandTemplate ||
       existing.commandTemplate ||
-      'claude --print "$TASK_PROMPT" --permission-mode acceptEdits'
+      'claude --print "$TASK_PROMPT" --permission-mode auto'
   ).trim();
   return {
     ...existing,

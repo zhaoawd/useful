@@ -124,11 +124,59 @@ body{
   background:var(--gray-100);border-radius:var(--radius-full);min-width:22px;height:22px;
   padding:0 7px;display:grid;place-items:center;font-variant-numeric:tabular-nums;
 }
+/* small "new" button in a column header (replaces the oversized dashed add panel) */
+.col-add{
+  margin-left:6px;border:1px solid var(--line-strong);background:#fff;border-radius:var(--radius);
+  padding:4px 10px;font:inherit;font-size:12px;font-weight:600;color:var(--body);cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px;transition:.15s var(--ease);flex:none;
+}
+.col-add:hover{background:var(--gray-75);border-color:var(--gray-400);}
+.col-add .icon{font-size:13px;}
 .col-body{display:flex;flex-direction:column;gap:10px;}
 .empty{
   border:1.5px dashed var(--line);border-radius:var(--radius-lg);padding:18px 14px;
   color:var(--muted);font-size:12.5px;text-align:center;
 }
+
+/* ---------------- Task lifecycle: phase dividers + archive group ---------------- */
+.phase-label{
+  display:flex;align-items:center;gap:7px;padding:8px 4px 1px;
+  font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--gray-500);
+}
+.phase-label:first-child{padding-top:2px;}
+.phase-label .dot{width:7px;height:7px;}
+.phase-label .phase-n{
+  margin-left:auto;font-size:10.5px;font-weight:700;color:var(--gray-500);
+  font-variant-numeric:tabular-nums;
+}
+.lifecycle-group{
+  border:1px solid var(--line);border-radius:var(--radius-lg);
+  background:var(--gray-50);overflow:hidden;margin-top:2px;
+}
+.lifecycle-group>summary{
+  list-style:none;cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;
+  padding:11px 13px;font-size:12px;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em;transition:.15s var(--ease);
+}
+.lifecycle-group>summary::-webkit-details-marker{display:none;}
+.lifecycle-group>summary::before{content:'▸';font-size:10px;color:var(--gray-500);}
+.lifecycle-group[open]>summary::before{content:'▾';}
+.lifecycle-group>summary:hover{color:var(--ink);background:var(--gray-75);}
+.lifecycle-group .lg-count{
+  margin-left:auto;font-size:11px;font-weight:700;color:var(--muted);
+  background:var(--gray-100);border-radius:var(--radius-full);min-width:20px;height:20px;
+  padding:0 6px;display:grid;place-items:center;font-variant-numeric:tabular-nums;
+}
+/* archived cards flow into a compact auto-fill grid so a lone card doesn't span
+   the whole (now wide) panel; auto-fill keeps empty tracks so it won't stretch */
+.lifecycle-group .lg-body{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));
+  gap:10px;align-items:start;padding:2px 11px 12px;
+}
+.lifecycle-group .lg-body .phase-label{grid-column:1/-1;}  /* dividers span the row */
+.lifecycle-group .card{opacity:.74;}
+.lifecycle-group .card:hover{opacity:1;}
 
 /* ---------------- Card ---------------- */
 .card{
@@ -166,11 +214,13 @@ body{
 .countdown.soon{color:var(--orange-900);} .countdown.over{color:var(--red-900);}
 
 /* expandable detail */
-.detail{border-top:1px solid var(--line);background:var(--gray-50);max-height:0;overflow:hidden;transition:max-height .28s var(--ease);}
-.card.open .detail{max-height:640px;}
+.detail{border-top:1px solid var(--line);background:var(--gray-50);display:grid;grid-template-rows:minmax(0,0fr);transition:grid-template-rows .28s var(--ease);}
+.card.open .detail{grid-template-rows:minmax(0,1fr);}
+.detail>.detail-in{min-height:0;overflow:hidden;}
+.card.open .detail>.detail-in{overflow-y:auto;max-height:72vh;}
 .detail-in{padding:13px 14px;display:flex;flex-direction:column;gap:11px;}
 .dlabel{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--gray-500);margin-bottom:4px;}
-.codeblock{font-family:var(--code);font-size:11.5px;line-height:1.6;color:var(--gray-800);background:#fff;border:1px solid var(--line);border-radius:7px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;}
+.codeblock{font-family:var(--code);font-size:11.5px;line-height:1.6;color:var(--gray-800);background:#fff;border:1px solid var(--line);border-radius:7px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;}
 .codeblock.dark{background:#1f2124;color:#e3e3e3;border-color:#1f2124;max-height:200px;overflow:auto;}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px;}
 .kv dt{color:var(--gray-500);font-weight:500;} .kv dd{margin:0;color:var(--body);font-weight:500;word-break:break-word;}
@@ -300,6 +350,11 @@ body{
 .modal-head .x{margin-left:auto;border:0;background:var(--gray-75);width:30px;height:30px;border-radius:7px;cursor:pointer;color:var(--muted);display:grid;place-items:center;font-size:15px;flex:none;}
 .modal-body{padding:0;overflow:auto;background:#1f2124;}
 .modal-body pre{margin:0;padding:16px 18px;color:#e3e3e3;font-family:var(--code);font-size:12px;line-height:1.65;white-space:pre-wrap;word-break:break-word;}
+/* card-detail popup (opened by clicking an archived card) — light body, max ~640px */
+#popModal .modal-card{width:min(640px,100%);}
+.modal-head h3.pop-title{font-family:var(--sans);}
+.pop-body{background:var(--panel);padding:14px 18px;overflow:auto;max-height:74vh;display:flex;flex-direction:column;gap:11px;}
+.pop-body .meta{display:flex;flex-direction:column;gap:5px;}
 
 /* ---------------- Toast ---------------- */
 .toasts{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center;}
@@ -337,18 +392,31 @@ body{
 .infra-detail .di-sub{font-size:12px;color:var(--muted);font-family:var(--code);}
 .infra-detail .detail-in{padding:11px 16px 15px;}
 
-/* ---------------- Main board: task sidebar + project grid ---------------- */
+/* ---------------- Main board: tasks + projects, more balanced split ---------------- */
 .board.two{
-  display:grid;grid-template-columns:minmax(320px,400px) minmax(0,1fr);
+  display:grid;grid-template-columns:minmax(400px,1fr) minmax(0,1.1fr);
   gap:20px;align-items:start;overflow:visible;
 }
 .board.two .col.tasks{min-width:0;max-width:none;width:100%;}
 .board.two .col.projects{min-width:0;max-width:none;width:100%;}
-/* projects flow into as many columns as fit; cards keep a comfortable width */
-.board.two .col.projects .col-body{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));
+/* projects column stacks: pinned grid, add button, then the collapsible tail */
+.board.two .col.projects .col-body{display:flex;flex-direction:column;gap:12px;}
+/* project cards flow into as many equal-width columns as fit (pinned + the tail
+   share one grid so card widths stay consistent) */
+.proj-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr));
   gap:12px;align-items:start;
 }
+.col.projects .lifecycle-group .lg-body.proj-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr));
+  gap:12px;align-items:start;padding:2px 11px 12px;
+}
+
+/* session activity line on project cards */
+.sess-line{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.sess-line .echip{font-size:10.5px;}
+.sess-m{color:var(--muted);font-weight:600;}
+.sess-dot{color:var(--gray-300);}
 
 /* ---------------- Project run history ---------------- */
 .runs{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff;}
@@ -379,8 +447,9 @@ body{
 }
 
 @media(min-width:1881px){
-  .board.two .col.projects .col-body{
-    grid-template-columns:repeat(auto-fill,minmax(360px,1fr));
+  .proj-grid,
+  .col.projects .lifecycle-group .lg-body.proj-grid{
+    grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
   }
 }
 </style>
@@ -442,6 +511,18 @@ body{
       <button class="x" id="logClose" aria-label="关闭">✕</button>
     </div>
     <div class="modal-body"><pre id="logBody">加载中…</pre></div>
+  </div>
+</div>
+
+<!-- card-detail popup (archived cards) -->
+<div class="modal" id="popModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <span id="popBadge"></span>
+      <h3 class="pop-title" id="popTitle">详情</h3>
+      <button class="x" id="popClose" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body pop-body" id="popBody"></div>
   </div>
 </div>
 
