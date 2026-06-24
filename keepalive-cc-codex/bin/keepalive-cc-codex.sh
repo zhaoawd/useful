@@ -18,6 +18,14 @@ RETRY_AFTER_FAILURE_SECONDS=1800
 # Make sure CLI paths are visible under launchd's minimal PATH.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
+# launchd does not source ~/.zshrc, so the local proxy that Claude/Codex need to
+# reach their APIs is absent here. Without it requests fail with 403 Request not
+# allowed. Mirror the proxy exports from ~/.zshrc so pings go through the tunnel.
+export http_proxy="http://127.0.0.1:10808"
+export https_proxy="http://127.0.0.1:10808"
+export all_proxy="socks5://127.0.0.1:10808"
+export no_proxy="localhost,127.0.0.1,::1"
+
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 epoch_ts() { date -r "$1" '+%Y-%m-%d %H:%M:%S'; }
 
